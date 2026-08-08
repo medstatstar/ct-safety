@@ -1,0 +1,33 @@
+# ============================================================
+# ct-safety packaging exclusions
+# Purpose: when this skill is packaged / published, NONE of the
+# files below may be shipped — especially any openFDA API key.
+# The GitHub publish path respects .gitignore; ClawHub respects
+# .clawhubignore (see that file). Keep the two in sync.
+# ============================================================
+
+# ---- Secrets / API keys (NEVER ship) ----
+.env
+*.env
+.env.*
+*.key
+*.secret
+*.token
+secrets.json
+credentials.json
+config.local.json
+
+# ---- Runtime caches / downloaded outputs (not part of the skill) ----
+out/
+out_live/
+*.cache
+faers_summary_cache.json
+faers_*.json
+faers_*.csv
+faers_*.xlsx
+cn_pv.json
+*.jsonl
+
+# ---- Python cruft ----
+__pycache__/
+*.pyc

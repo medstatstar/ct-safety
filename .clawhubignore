@@ -1,0 +1,32 @@
+# ============================================================
+# ct-safety packaging exclusions for ClawHub publish.
+# Mirror of .gitignore. The ClawHub packager uses this file to
+# decide what to strip from the published package. Goal: never
+# ship an openFDA API key or runtime caches/outputs.
+# ============================================================
+
+# ---- Secrets / API keys (NEVER ship) ----
+.env
+*.env
+.env.*
+*.key
+*.secret
+*.token
+secrets.json
+credentials.json
+config.local.json
+
+# ---- Runtime caches / downloaded outputs (not part of the skill) ----
+out/
+out_live/
+*.cache
+faers_summary_cache.json
+faers_*.json
+faers_*.csv
+faers_*.xlsx
+cn_pv.json
+*.jsonl
+
+# ---- Python cruft ----
+__pycache__/
+*.pyc
