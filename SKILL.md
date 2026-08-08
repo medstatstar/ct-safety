@@ -3,7 +3,7 @@ slug: ct-safety
 displayName: 临床试验安全信号专家 / Clinical Trial Safety Signal
 name: ct-safety
 cn_name: 临床试验安全信号专家
-version: 0.1.31
+version: 0.1.32
 invocable: true
 required_commands: [python]
 summary: 基于 FDA FAERS 公开不良事件数据做 disproportionality 信号检测（PRR / ROR / IC / EBGM），辅助药物安全性监测；可选接入中国官方药物警戒通报（cdr-adr.org.cn）作定性佐证。检索公开不良事件数据（B 档：普通输入 + 对外检索）。
@@ -30,7 +30,7 @@ permissions:
   scope: "user-space-only"
   network: "optional"
   network_note: "Reads only public sources: FDA FAERS / openFDA (https://api.fda.gov/drug/event.json) and, when --with-cn-pv, the public columns of cdr-adr.org.cn (国家不良反应监测中心; no WAF, no key). No confidential input; ordinary input + public retrieval (B-tier). NMPA main site is WAF-blocked (HTTP 412) and intentionally excluded. Low-frequency, keyless FAERS; optional --api-key raises quota."
-  filesystem: "read-only to its own files; writes report files only to current working directory"
+  filesystem: "read-only to its own files; writes outputs ONLY to the user-specified --out-dir (default: current working directory). No system-path or hidden logging; any operational log (e.g. safety_err.log) is written under --out-dir (out_live/), never outside it, and FAERS raw responses are not persisted unless the user explicitly saves them."
   data: "no confidential data input; no external transmission of user data"
 
 ---
@@ -49,6 +49,13 @@ The SKILL.md body, `references/*.md`, and `AGENTS.md` are English-only and agent
 # Clinical Trial Safety Signal
 
 > Safe by default: **overview-first**. Step 1 (overview) runs automatically; Step 2 (detailed retrieval) runs ONLY after the user explicitly confirms.
+
+## Disclaimer & Intended Use
+
+- **Audience.** This skill is intended for **pharmacovigilance / clinical-trial methodologists and drug-safety professionals**. It is a methodologic signal-screening aid, not end-user health software.
+- **Not a clinical or regulatory decision tool.** All outputs are **statistical disproportionality signals** computed from *spontaneous* adverse-event reports (FDA FAERS), which are subject to reporting bias, under-reporting, and confounding. A signal **does NOT establish causation** and **MUST NOT** be used to start, stop, or change any medication, or to make clinical or regulatory decisions. Always corroborate with RCTs, product labels, and qualified clinical/regulatory judgment (ICH E2 family).
+- **Data flow (transparent).** Reads ONLY public sources — FDA FAERS / openFDA and, optionally, the public columns of cdr-adr.org.cn. Writes outputs SOLELY to the user-specified `--out-dir` (default: current working directory). **No system-path or hidden logging**; any operational log (e.g. `safety_err.log`) is written ONLY under `--out-dir` (e.g. `out_live/`), never outside it, and FAERS raw responses are not persisted unless the user explicitly saves them. Zero confidential data input; no user data is transmitted externally.
+- **Dev artifacts excluded from the runtime package.** The `tests/` directory (regression harness) is shipped only in the source repo, not in the installed runtime package.
 
 ## Purpose
 

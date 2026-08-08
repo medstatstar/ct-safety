@@ -1,4 +1,4 @@
-# AGENTS.md — ct-safety v0.1.31 (self-improvement convention)
+# AGENTS.md — ct-safety v0.1.32 (self-improvement convention)
 
 This file defines the self-improvement and logging conventions for the ct-safety skill, following ct-base `BASE.md` §7.
 

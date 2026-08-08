@@ -30,3 +30,15 @@ cn_pv.json
 # ---- Python cruft ----
 __pycache__/
 *.pyc
+
+# ---- Dev-only test harness (NOT shipped to runtime package) ----
+# The `tests/` directory uses importlib.util.exec_module / __import__ to
+# discover and load test modules. ClawHub's static scanner flags this as
+# `suspicious.dynamic_code_execution` (false positive — it is stdlib module
+# loading, not arbitrary-code execution). Tests are dev assets: kept in the
+# GitHub repo for transparency, but STRIPPED from the ClawHub package so the
+# published runtime surface stays clean. (.gitignore intentionally keeps tests
+# so the repo remains auditable.)
+tests/
+tests/**
+diagnose_rounds.py
