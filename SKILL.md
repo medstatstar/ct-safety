@@ -3,7 +3,7 @@ slug: ct-safety
 displayName: 临床试验安全信号专家 / Clinical Trial Safety Signal
 name: ct-safety
 cn_name: 临床试验安全信号专家
-version: 0.1.35
+version: 0.1.36
 invocable: true
 required_commands: [python]
 summary: 基于 FDA FAERS 公开不良事件数据做 disproportionality 信号检测（PRR / ROR / IC / EBGM），辅助药物安全性监测；可选接入中国官方药物警戒通报（cdr-adr.org.cn）作定性佐证。检索公开不良事件数据（B 档：普通输入 + 对外检索）。
@@ -87,6 +87,7 @@ Four disproportionality measures on the drug–event 2×2 table, plus multiple-t
 - **aROR** multi-drug adjusted ROR (`--compare-drugs`).
 - **Temporal anomaly** CUSUM / rolling-Z / changepoint (`--trend`).
 - **Safety Signal Score (0–100) + T1–T4 tier** (`--with-fda-label`).
+- **Naranjo 因果归因（定性补充，non-causal）** (`--with-causality`) — 经典 7 准则打分（Definite/Probable/Possible/Doubtful）作为因果归因定性旁证；**独立于** disproportionality，不与其混算、不喂入 PRR/ROR/IC/EBGM。
 
 Full formulas, thresholds, EBGM/MGPS math, FDR, aROR, trend, and the score/tier weighting are in `references/methods.md`.
 
@@ -106,6 +107,7 @@ Full formulas, thresholds, EBGM/MGPS math, FDR, aROR, trend, and the score/tier 
 | Temporal anomaly (`--trend`) | — | Quarterly CUSUM / rolling-Z / changepoint |
 | Multi-drug aROR (`--compare-drugs`) | — | Focal vs pooled-reference adjusted ROR |
 | Score 0–100 + T1–T4 (`--with-fda-label`) | FAERS×Label×CN-PV | Triangulated evidence tier |
+| Naranjo 因果归因（`--with-causality`） | FAERS 时间/去激发/再用药 + 可选 label | 定性因果归因旁证（non-causal，独立于统计信号） |
 | Non-ASCII drug-name auto-translate | — | `--drug 阿司匹林` → `aspirin`; disable `--no-resolve-drug-name` |
 
 ## Requirements

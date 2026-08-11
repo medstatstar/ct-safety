@@ -17,10 +17,14 @@ Usage:
   from i18n import t
   print(t("error.rscript_not_found"))
   print(t("info.result_saved", path="/tmp/x.json"))
+
+Bilingual data lives in i18n_messages.json (same directory) -- see that file
+for all EN/ZH strings. This module holds only detection + lookup logic.
 """
 
 import os
 import sys
+import json
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -95,119 +99,38 @@ def _current_lang():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Message dictionary / 消息字典
+# Message dictionary / 消息字典 —— 数据外置到 i18n_messages.json（EN/ZH 成对）
 # ═══════════════════════════════════════════════════════════════════════════
 
-_MESSAGES = {
-    # ── Generic messages shared by ALL ct- skills / 全库通用消息 ──
-    "dry_run.not_executed": {
-        "en": "[DRY RUN — code not executed. Remove --dry-run to execute.]",
-        "zh": "[DRY RUN — 代码未执行。去掉 --dry-run 以执行。]",
-    },
-    "safe_preview.not_executed": {
-        "en": "[SAFE PREVIEW] R code was NOT executed. Re-run with --yes to compute the result.",
-        "zh": "[安全预览] R 代码未执行。追加 --yes 重新运行以计算结果。]",
-    },
-    "exec.running": {
-        "en": "[EXECUTING R CODE...]",
-        "zh": "[正在执行 R 代码...]",
-    },
-    "info.r_code_shown_default": {
-        "en": "[INFO] R code is shown by default in preview mode. Re-run with --show-code while using --yes to also display it during execution.",
-        "zh": "[提示] 预览模式默认展示 R 代码。执行时追加 --show-code 可同时查看代码。]",
-    },
-    "info.result_saved": {
-        "en": "Result JSON saved to: {path}",
-        "zh": "结果 JSON 已保存至：{path}",
-    },
-    "info.png_saved": {
-        "en": "PNG saved to: {path}",
-        "zh": "PNG 已保存至：{path}",
-    },
-    "error.rscript_not_found": {
-        "en": "[ERROR] Rscript not found or invalid. Set RSCRIPT_PATH env or install R.",
-        "zh": "[错误] 未找到 Rscript 或路径无效。请设置 RSCRIPT_PATH 环境变量或安装 R。",
-    },
-    "error.invalid_temp_path": {
-        "en": "[ERROR] Invalid temp path; execution refused.",
-        "zh": "[错误] 临时路径无效；执行已拒绝。]",
-    },
-    "error.r_timeout": {
-        "en": "[ERROR] R execution timed out (300s limit)",
-        "zh": "[错误] R 执行超时（300 秒限制）]",
-    },
-    "error.exec_failed": {
-        "en": "[ERROR] Execution failed: {name}",
-        "zh": "[错误] 执行失败：{name}",
-    },
-    "error.invalid_install_path": {
-        "en": "[ERROR] Invalid install script path; execution refused.",
-        "zh": "[错误] 安装脚本路径无效；执行已拒绝。]",
-    },
-    "error.rscript_not_found_install": {
-        "en": "[ERROR] Rscript not found or invalid. Is R installed?",
-        "zh": "[错误] 未找到 Rscript 或路径无效。是否已安装 R？]",
-    },
-    "error.generic": {
-        "en": "ERROR: {msg}",
-        "zh": "错误：{msg}",
-    },
-    "error.val_err": {
-        "en": "ERROR: {msg}",
-        "zh": "错误：{msg}",
-    },
-    "validation.failed": {
-        "en": "Parameter validation failed:",
-        "zh": "参数校验失败：",
-    },
-    "validation.range_error_gt": {
-        "en": "--{label} must be > {bound} (got {val})",
-        "zh": "--{label} 必须 > {bound}（当前值 {val}）",
-    },
-    "validation.range_error_lt": {
-        "en": "--{label} must be < {bound} (got {val})",
-        "zh": "--{label} 必须 < {bound}（当前值 {val}）",
-    },
-    "install.cmd_header": {
-        "en": "[R package commands — for review only, NOT executed]",
-        "zh": "[R 包安装命令 — 仅供审阅，未执行]",
-    },
-    "install.cran_warning": {
-        "en": "This command will download and install {n} R packages from CRAN (the ONLY network operation in this skill).",
-        "zh": "此命令会**从 CRAN 联网下载并安装** {n} 个 R 包（即本技能唯一会联网的操作）。",
-    },
-    "install.confirm_prompt": {
-        "en": "If confirmed, re-run with --run-install to actually download:",
-        "zh": "如确认无误，请重新运行并追加 --run-install 才会真正联网安装：",
-    },
-    "install.manual_alt": {
-        "en": "Or paste the above command into an R console to install manually.",
-        "zh": "或在 R 控制台中手动粘贴上述命令自行安装。",
-    },
-    "install.network_warning_en": {
-        "en": "⚠️  NETWORK INSTALL: the following R code will download packages from CRAN",
-        "zh": "⚠️  联网安装：以下 R 代码将从 CRAN 下载并安装 R 包（供应链风险由你知情触发）",
-    },
-    "install.code_header": {
-        "en": "[R CODE — will be executed by Rscript]",
-        "zh": "[R 代码 — 将由 Rscript 执行]",
-    },
-    "header.r_code": {
-        "en": "[R CODE — generated for this analysis]",
-        "zh": "[R 代码 — 本次分析生成]",
-    },
-    "header.install_cmd": {
-        "en": "[R package commands — for review only, NOT executed]",
-        "zh": "[R 包安装命令 — 仅供审阅，未执行]",
-    },
-}
+# 外部双语数据文件（与本模块同目录），全库面向用户 EN/ZH 字符串的唯一来源。
+# 新增/修改文案请在 i18n_messages.json 中操作，切勿在消费脚本内硬编码中英文。
+# / External bilingual data file (same dir). Single source of truth for all
+# user-facing EN/ZH strings. Edit i18n_messages.json, never hard-code in callers.
+#
+# 分区索引（与 JSON 内 key 前缀对应）：
+#   generic / exec / info / error / validation / install / header —— 全库通用消息
+#   xlsx.*          —— ct-registry Excel 报告框架标签
+#   xlsx.safety.*   —— ct-safety FAERS Excel 报告标签
+#   kw_gate.*       —— ct-registry 关键字体系确认菜单
+#   auth.*          —— 首次出站授权 / 依赖缺失 / 网络错误 / 回退本地等一次性提示（底座预置标准词条）
+# 注：原始数据值（CDE 中文状态、中文适应症、反应 PT 等）一律不翻译，仅翻译 UI 框架标签。
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_MSG_PATH = os.path.join(_HERE, "i18n_messages.json")
+
+try:
+    with open(_MSG_PATH, encoding="utf-8") as _f:
+        _MESSAGES = json.load(_f)
+except (OSError, ValueError):
+    # 离线兜底：文件缺失/损坏也不让模块崩溃；缺的 key 由 t() 回退为 key 本身。
+    _MESSAGES = {}
 
 
 def t(key, **kwargs):
     """Translate a message key to the current locale.
 
     Args:
-        key: message identifier in _MESSAGES
+        key: message identifier in i18n_messages.json
         **kwargs: format placeholders (e.g., path="/tmp/x.json")
 
     Returns:

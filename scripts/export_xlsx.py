@@ -7,8 +7,8 @@ filterable/sortable case table, a cover-style README with KPI cards, and a Summa
 sheet that auto-aggregates 9 distributions (each: LEFT data table + RIGHT native
 chart). All charts are native .xlsx (no web page).
 
-i18n: all UI frame labels are localized via ct-base's shared ``i18n.t()``
-(single source of truth in ct-base/scripts/i18n.py, keys ``xlsx.*`` / ``xlsx.safety.*``).
+i18n: all UI frame labels are localized via vendored ``i18n.t()``
+(copy of ct-base/scripts/i18n.py, keys ``xlsx.*`` / ``xlsx.safety.*``).
 Pass ``--lang {auto,zh,en}`` (default ``auto`` = OS locale). RAW DATA VALUES
 (reaction PTs, country codes, drug names, indication text) are NEVER translated —
 data fidelity is preserved; only the interface chrome switches language.
@@ -40,26 +40,25 @@ import xlsxwriter
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# i18n — reuse ct-base's shared i18n (single source of truth)
+# i18n — vendored copy of ct-base's shared i18n
+# IMPORTANT (2026-08-11): ct-base is NEVER published. Every ct- skill must carry
+# its own complete copy. We ONLY import from this skill's own `scripts/` dir.
 # ═══════════════════════════════════════════════════════════════════════════
-# ct-safety and ct-base are sibling skills under ~/.workbuddy/skills/.
-_CT_BASE_SCRIPTS = os.path.normpath(os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "..", "ct-base", "scripts"))
-if _CT_BASE_SCRIPTS not in sys.path:
-    sys.path.insert(0, _CT_BASE_SCRIPTS)
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
 try:
     from i18n import t, set_lang   # noqa: E402
-except Exception:  # defensive fallback — ct-base must be present in normal use
+except Exception:  # defensive fallback — vendored copy must be present
     def t(key, **kw):
         return key
     def set_lang(code):
         pass
 
 
-# ---- shared Excel visual standard (single source of truth in ct-base) ------
-# All palette / format / layout / chart logic lives in ct-base/scripts/excel_style.py.
-# We import it and derive the legacy module-level constants the build_* functions
-# still reference (conditional-format colours, chart column, etc.).
+# ---- shared Excel visual standard (vendored from ct-base) ------
+# All palette / format / layout / chart logic lives in scripts/excel_style.py
+# (vendored from ct-base/scripts/excel_style.py).
 try:
     from excel_style import (
         make_formats, banner as _banner, page_decor as _page_decor,
@@ -68,8 +67,8 @@ try:
         ROW_PX, MIN_CHART_ROWS, MIN_CHART_H, BAND_GAP, HEADER_H,
     )
 except Exception as _e:
-    raise RuntimeError("ct-safety export_xlsx: cannot import ct-base "
-                       "excel_style standard: " + str(_e))
+    raise RuntimeError("ct-safety export_xlsx: cannot import vendored "
+                       "excel_style: " + str(_e))
 P = PALETTES["safety"]
 RED, DARKRED, LIGHTRED = P["blue"], P["navy"], P["light"]
 BANNER = P["banner"]
@@ -185,11 +184,11 @@ def _make_formats(wb):
 
 
 # ---- low-level styling helpers ---------------------------------------------
-# _banner / _page_decor / _kpi_card are imported from ct-base excel_style.
+# _banner / _page_decor / _kpi_card are imported from vendored excel_style.
 
 
 # ---- chart factory ----------------------------------------------------------
-# _add_chart is imported from ct-base excel_style (_style_series / _pie_points
+# _add_chart is imported from vendored excel_style (_style_series / _pie_points
 # stay local — they carry the medical-red chart theming).
 
 
@@ -222,7 +221,7 @@ def _pie_points(key):
     return None
 
 
-# _chart_h / _chart_w are imported from ct-base excel_style.
+# _chart_h / _chart_w are imported from vendored excel_style.
 
 
 # ═══════════════════════════════════════════════════════════════════════════

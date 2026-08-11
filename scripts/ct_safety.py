@@ -27,6 +27,7 @@ import adjust_ror
 import fetch_fda_label
 import signal_score
 import drug_name_resolver
+import causality
 
 
 def _render_top_events(data, drug, cn_pv=None):
@@ -81,7 +82,8 @@ def run(drug, event, field, top, api_key, out_dir, with_cn_pv=False,
         drug_cn=None, event_cn=None, cn_terms=None, cn_max=10,
         date_from=None, date_to=None, benchmark_drugs=None, top_events_signal=None,
         continuity=True, trend=False, compare_drugs=None, with_fda_label=False,
-        case_level=0, resolve_drug_name=True):
+        case_level=0, resolve_drug_name=True, with_causality=False,
+        naranjo_evidence=None):
     # 预处理：非 ASCII 药物名 → 英文标准名（CLI 菜单确认）
     if resolve_drug_name and drug_name_resolver.is_non_ascii(drug):
         resolved, _ = drug_name_resolver.resolve(drug, event=event)
@@ -131,12 +133,14 @@ def run(drug, event, field, top, api_key, out_dir, with_cn_pv=False,
         md = _render_top_events(data, drug, cn_pv=cn_pv)
 
     # ② case_id linkage (R14): fetch individual FAERS case safety reports when requested
+    cases_data = None
     if case_level and event:
         faers_cases_json = os.path.join(out_dir, "faers_cases.json")
         try:
-            fetch_faers.fetch_case_reports(drug, event, field, n=case_level,
-                                           run=True, out=faers_cases_json,
-                                           date_from=date_from, date_to=date_to)
+            cr = fetch_faers.fetch_case_reports(drug, event, field, n=case_level,
+                                                run=True, out=faers_cases_json,
+                                                date_from=date_from, date_to=date_to)
+            cases_data = (cr or {}).get("cases")
         except Exception as e:  # noqa: BLE001 - best-effort; degrade gracefully
             print("[ct_safety][case-level] fetch failed: %s" % e)
 
@@ -218,6 +222,42 @@ def run(drug, event, field, top, api_key, out_dir, with_cn_pv=False,
             md += _render_score(score_res, label_status, drug, event)
         except Exception as e:
             print("[WARN] signal score failed (report continues): %s" % e)
+
+    # P0-A: Naranjo causal-attribution layer (qualitative supplement, INDEPENDENT
+    # of disproportionality). Only attached when explicitly requested (--with-causality)
+    # and an event pair is present. Never feeds PRR/ROR/IC/EBGM.
+    if with_causality and event:
+        try:
+            naranjo_ev = None
+            if naranjo_evidence:
+                if isinstance(naranjo_evidence, str):
+                    naranjo_ev = causality._load_input(naranjo_evidence) \
+                        if naranjo_evidence.endswith(".json") else None
+                elif isinstance(naranjo_evidence, dict):
+                    naranjo_ev = naranjo_evidence
+            if naranjo_ev is None:
+                if cases_data:
+                    # aggregate FAERS case-level features (time / dechallenge /
+                    # rechallenge) into a conservative representative evidence dict
+                    naranjo_ev = causality.from_faers_cases(cases_data)
+                else:
+                    # no individual-case data: default unknowns, but if FDA label
+                    # was checked, reflect known_reaction_pattern from label status
+                    _kr = 0
+                    if "label_status" in dir() and label_status == "labeled":
+                        _kr = 1
+                    elif "label_status" in dir() and label_status == "unlabeled":
+                        _kr = -1
+                    naranjo_ev = {"known_reaction_pattern": _kr}
+            naranjo_res = causality.naranjo_assessment(
+                naranjo_ev, meta={"drug": drug, "event": event})
+            md += _render_causality(naranjo_res, drug, event)
+            naranjo_json = os.path.join(out_dir, "naranjo_causality.json")
+            with open(naranjo_json, "w", encoding="utf-8") as fp:
+                json.dump(naranjo_res, fp, ensure_ascii=False, indent=2)
+            print("[OK] naranjo causality ->", naranjo_json)
+        except Exception as e:  # noqa: BLE001 - best-effort; degrade gracefully
+            print("[WARN] naranjo causality failed (report continues): %s" % e)
 
     with open(md_out, "w", encoding="utf-8") as f:
         f.write(md)
@@ -629,6 +669,39 @@ def _render_score(score, label_status, drug, event):
     return "\n".join(lines)
 
 
+def _render_causality(assessment, drug, event):
+    """Render the Naranjo causality attribution as an INDEPENDENT report section.
+
+    P0-A: qualitative supplement only. The section title and body explicitly state
+    that this score is NON-CAUSAL, is NOT mixed with disproportionality statistics,
+    and is NOT fed into PRR / ROR / IC / EBGM. Wording uses "提示/可能" (suggests /
+    may), never "证明" (proves).
+    """
+    cat = assessment.get("category_zh", "—")
+    code = assessment.get("category_code", "—")
+    total = assessment.get("total", 0)
+    lines = ["\n\n## Naranjo 因果归因（定性补充，non-causal，不作为因果结论）\n"]
+    lines.append("药物 Drug: **%s** / 事件 Event: **%s**\n" % (drug, event))
+    lines.append("- 归因判定 Causality category: **%s (%s)**" % (cat, code))
+    lines.append("- Naranjo 总分 Total score: **%d**" % total)
+    lines.append("\n### 7 准则打分 / Seven Criteria\n")
+    lines.append("| # | 准则 Criterion | 问题 Question | 得分 Score |")
+    lines.append("|---|---|---|---|")
+    for i, c in enumerate(assessment.get("criteria", []), 1):
+        sc = c.get("score", 0)
+        sc_disp = ("+1" if sc > 0 else ("-1" if sc < 0 else "0"))
+        lines.append("| %d | %s / %s | %s | %s |" % (
+            i, c.get("zh"), c.get("en"), c.get("question"), sc_disp))
+    lines.append("\n> ⚠️ **本模块为纯启发式、定性、non-definitive 的因果归因补充，**"
+                 "用于提示该药物-事件组合**可能**属于 drug-specific / class-wide / confounding 中的哪类线索。")
+    lines.append("> **该分数不与 dispropor­tionality 统计信号混算，也不喂入 PRR / ROR / IC / EBGM**"
+                 "——它独立于上述定量信号，仅作定性旁证。")
+    lines.append("> 文案用「提示 / 可能」而非「证明」；自发报告存在报告偏倚、混杂与低报，"
+                 "Naranjo 评分**不能建立因果结论**，须结合 RCT、产品标签与合格临床/监管判断（ICH E2 家族）。")
+    lines.append("> 缺字段默认按「未知 (unknown = 0)」兜底，避免对证据不足的准则过度声称。")
+    return "\n".join(lines)
+
+
 def _run_validate_controls(out_dir, api_key, field, top, continuity=True):
     """--validate-controls: fetch known positive/negative control pairs from FAERS,
     compute disproportionality (with continuity correction), and check whether the
@@ -747,6 +820,13 @@ def main():
     # 非 ASCII 药物名自动翻译为英文名
     ap.add_argument("--no-resolve-drug-name", action="store_true",
                     help="禁用非 ASCII（如中文）药物名自动翻译为英文名的预处理")
+    # P0-A: Naranjo 因果归因层（定性补充，non-causal；独立于 disproportionality）
+    ap.add_argument("--with-causality", action="store_true",
+                    help="附加 Naranjo 7 准则因果归因独立章节（定性补充，non-causal，"
+                         "不与 PRR/ROR/IC/EBGM 混算）")
+    ap.add_argument("--naranjo-evidence", help="Naranjo 证据 JSON 路径：单个 7 键 "
+                    "evidence dict，或 FAERS 病例 dict 列表（用于从病例聚合）。"
+                    "缺省则尝试用 --case-level 病例聚合，或按 unknown 兜底。")
     args = ap.parse_args()
 
     # --validate-controls runs independently of any specific drug/event
@@ -775,7 +855,9 @@ def main():
         continuity=not args.no_continuity, trend=args.trend,
         compare_drugs=args.compare_drugs, with_fda_label=args.with_fda_label,
         case_level=args.case_level,
-        resolve_drug_name=not args.no_resolve_drug_name)
+        resolve_drug_name=not args.no_resolve_drug_name,
+        with_causality=args.with_causality,
+        naranjo_evidence=args.naranjo_evidence)
 
 
 if __name__ == "__main__":
