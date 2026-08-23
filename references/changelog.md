@@ -3,6 +3,8 @@
 Moved from SKILL.md to keep the main file ≤200 lines (ct-base v1.1.20 §16.1).
 Technical-fact reference; the most recent entry is authoritative.
 
+- **v0.1.38** (2026-08-16) — ct-update P1 升级落地（本地，未发布）。四项 P1 脚本（`signal_verification.py` / `meddra_coding.py` / `signal_prioritizer.py` / `psur_generator.py`，此前 2026-08-11 已建文件但未集成/未登记）正式接入主流程 `ct_safety.py`：新增 `--verify-signal`（时序/剂量-反应/去卷积确证）、`--code-verbatim`（verbatim→PT）、`--prioritize`（多维风险分级 + 合并 K 的 label-gap/趋势维度）、`--psur`（CIOMS/ICH E2C(R2) PSUR Markdown）。全部 `py_compile` 通过、离线功能自测通过；`applied_upgrades.json` 登记 `ct-safety::C/D/E/F/K` 且 verify 全部通过。修复 4 脚本误写版本号 `v2.3.0`→`v0.1.38`。
+
 - **v0.1.23** (2026-08-03) — **Bug fix: skill-root `.env` was never read.** `resolve_api_key()` declared `_DOTENV` but did not use it as the default, so `if dotenv_path and ...` short-circuited whenever the argument was omitted — a key in skill-root `.env` was silently ignored on the default path (`fetch_fda_label` unaffected because its call sites passed `_DOTENV` explicitly). Both modules now fall back to `_DOTENV` when `dotenv_path is None`. Added regression tests `test_resolve_api_key_priority_faers` / `_fda_label` covering the default path plus full CLI > env > `.env` > None precedence; they repoint `mod._DOTENV` at a temp file so a real `.env` is never touched. Verified fault-injection. Suite: 46 total, 44 PASS / 0 FAIL / 2 SKIP.
 
 - **v0.1.22** (2026-08-03) — API-key application + packaging hygiene (no functional regression to signal math):

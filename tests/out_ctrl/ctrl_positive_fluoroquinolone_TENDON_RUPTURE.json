@@ -1,0 +1,63 @@
+{
+  "source": "FAERS",
+  "api": "openFDA drug/event.json",
+  "drug": "fluoroquinolone",
+  "field": "patient.drug.medicinalproduct",
+  "date_from": null,
+  "date_to": null,
+  "drug_total": 41,
+  "grand_total": 20692690,
+  "top_events": [
+    {
+      "term": "CARDIAC ARREST",
+      "count": 4
+    },
+    {
+      "term": "PAIN IN EXTREMITY",
+      "count": 3
+    },
+    {
+      "term": "TENDON RUPTURE",
+      "count": 3
+    },
+    {
+      "term": "TOXICITY TO VARIOUS AGENTS",
+      "count": 3
+    },
+    {
+      "term": "ACUTE RESPIRATORY DISTRESS SYNDROME",
+      "count": 2
+    },
+    {
+      "term": "ANXIETY",
+      "count": 2
+    },
+    {
+      "term": "ARTHRALGIA",
+      "count": 2
+    },
+    {
+      "term": "ASCITES",
+      "count": 2
+    },
+    {
+      "term": "ASTHENIA",
+      "count": 2
+    },
+    {
+      "term": "BLOOD BILIRUBIN INCREASED",
+      "count": 2
+    }
+  ],
+  "event": "TENDON RUPTURE",
+  "counts": {
+    "a": 3,
+    "b": 38,
+    "c": 12215,
+    "d": 20680434,
+    "drug_total": 41,
+    "event_total": 12218,
+    "grand_total": 20692690
+  },
+  "event_total": 12218
+}

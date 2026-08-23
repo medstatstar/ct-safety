@@ -3,10 +3,10 @@ slug: ct-safety
 displayName: 临床试验安全信号专家 / Clinical Trial Safety Signal
 name: ct-safety
 cn_name: 临床试验安全信号专家
-version: 0.1.36
+version: 0.9.0
 invocable: true
 required_commands: [python]
-summary: 基于 FDA FAERS 公开不良事件数据做 disproportionality 信号检测（PRR / ROR / IC / EBGM），辅助药物安全性监测；可选接入中国官方药物警戒通报（cdr-adr.org.cn）作定性佐证。检索公开不良事件数据（B 档：普通输入 + 对外检索）。
+summary: "基于 FDA FAERS 公开不良事件数据做 disproportionality 信号检测（PRR / ROR / IC / EBGM），辅助药物安全性监测；可选接入中国官方药物警戒通报（cdr-adr.org.cn）作定性佐证。检索公开不良事件数据（B 档：普通输入 + 对外检索）。"
 license: MIT
 description: "基于 FDA FAERS（经 openFDA 公开 REST API）做药物-事件 disproportionality 信号检测，计算 PRR / ROR / IC / EBGM 及 95% 置信区间与信号判定；一次性流水线默认产出两份核心交付物——① 可渲染的 HTML 报告（可视化结论）② XLSX 数据簿（含全部原始 FAERS 计数、2×2 表、四种方法及 FDA 标签/CN-PV/评分明细，供逐条查阅与审计）；同时保留 JSON / Markdown 作兼容备份。可选 --with-cn-pv 增加中国官方药物警戒通报（cdr-adr.org.cn）定性检索作信号佐证。所有数据均为公开不良事件报告，不输入任何保密数据或信息，B 档（普通数据输入 + 对外检索），可快速推广技能。 / Signal detection on FDA FAERS (via openFDA public REST API): computes PRR / ROR / IC / EBGM with 95% CIs and signal flags from the drug-event 2x2 table. The one-shot pipeline emits TWO core deliverables by default — ① a renderable HTML report (visual conclusion) and ② an XLSX workbook holding ALL raw FAERS counts, the 2x2 table, the four methods, and FDA-label / CN-PV / score details for line-by-line audit; JSON / Markdown are kept as compatibility backups. Optional --with-cn-pv adds qualitative China official PV bulletin search (cdr-adr.org.cn) as signal corroboration. All data are public adverse-event reports; zero confidential data or information input — B-tier quickly-adoptable."
 triggers:
@@ -108,6 +108,11 @@ Full formulas, thresholds, EBGM/MGPS math, FDR, aROR, trend, and the score/tier 
 | Multi-drug aROR (`--compare-drugs`) | — | Focal vs pooled-reference adjusted ROR |
 | Score 0–100 + T1–T4 (`--with-fda-label`) | FAERS×Label×CN-PV | Triangulated evidence tier |
 | Naranjo 因果归因（`--with-causality`） | FAERS 时间/去激发/再用药 + 可选 label | 定性因果归因旁证（non-causal，独立于统计信号） |
+| 信号验证工作流（`--verify-signal`） | FAERS 季度报告序列 | 时序 CUSUM/Poisson 趋势 + 剂量-反应/去卷积（确证补充；剂量-反应/去卷积需 `--case-level` 个案数据） |
+| MedDRA 编码辅助（`--code-verbatim`） | verbatim AE 术语 | verbatim→PT 模糊匹配（内置字典；LLM 模式 opt-in，不自动开启） |
+| 信号优先级排序与风险分级（`--prioritize`） | 检测到的信号 | 多维评分（严重度×新颖性×频率×趋势×多源）→ CRITICAL/HIGH/MEDIUM/LOW |
+| Label-gap & 时间趋势优先级层（随 `--prioritize`） | `--with-fda-label` + `--trend` | 未预期风险(label-gap)+异常趋势自动抬升优先级（K 项） |
+| PSUR/PBRER 自动报告（`--psur`） | 检测到的信号 | 生成 CIOMS/ICH E2C(R2) 格式 PSUR Markdown（psur.md） |
 | Non-ASCII drug-name auto-translate | — | `--drug 阿司匹林` → `aspirin`; disable `--no-resolve-drug-name` |
 
 ## Requirements
@@ -187,3 +192,12 @@ Atomic-task unit index: `references/units.md`. Changelog: `references/changelog.
 ## Regression Tests
 
 Stdlib-only suite (no pytest): `python tests/run_tests.py` (offline) / `--live` (real openFDA). `tests/_mocks.py` stubs network; `tests/diagnose_rounds.py` runs 10×10 adversarial cases (CRASH/ANOMALY/OK). Details in `references/errors.md`.
+
+## Bug Reporting (ct-base §20.3, adapter: `adapters/bug_report.py`)
+
+- **Trigger (strong signal, max 1 proposal/session):** unexpected non-zero exit / engine or compute error / user explicitly questions the result — **and** the same operation was retried ≥1. Weak signal (just repeated tuning) never triggers.
+- **Two-stage confirmation (2026-08-21):** ① propose-with-preview — show the bilingual `confirm_prompt` **together with** the full report (`render_report_text`, state "sanitized, no input data", invite a problem description; if the user adds one, re-render and re-show before consent) → ② on explicit consent, `send_to_endpoint` (auto action=report, endpoint `https://ct-bugreport.coze.site/run`, token = embedded §5 public credential). If the user declines, never re-propose this session.
+- **Sanitization is hard:** the report carries only the 11-key whitelist (skill / version / error_type / error_code / engine_status / description / locale / query_origin / session_hash / attempts / test) — never raw data or subject records. `description` is the single free-text field for debugging, **user-reviewed**: write the symptom / reproduction / expected vs actual / algorithm or function used / error message; values and study design are OK. Hard boundary: no identifiable person/institution/subject info. The user reviews it in stage ① before consent; empty description omits the key. If the session had **no** cloud call, `save_local_report()` writes a local md + author email (data never leaves the machine).
+- **Client-only:** this adapter sends `report` only. Governance actions (get/update/download/delete — pull pending, mark done, download all, clean up) are reserved for the `ct-update` skill (author side); never call them from here.
+
+Invoke: `python adapters/bug_report.py --error-type <t> --description "<free text>" [--send]` (add `--send` only after the user confirms).

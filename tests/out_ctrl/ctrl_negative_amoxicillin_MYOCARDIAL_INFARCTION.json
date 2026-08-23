@@ -1,0 +1,63 @@
+{
+  "source": "FAERS",
+  "api": "openFDA drug/event.json",
+  "drug": "amoxicillin",
+  "field": "patient.drug.medicinalproduct",
+  "date_from": null,
+  "date_to": null,
+  "drug_total": 114994,
+  "grand_total": 20692690,
+  "top_events": [
+    {
+      "term": "DIARRHOEA",
+      "count": 6918
+    },
+    {
+      "term": "DRUG INEFFECTIVE",
+      "count": 6048
+    },
+    {
+      "term": "DYSPNOEA",
+      "count": 6000
+    },
+    {
+      "term": "NAUSEA",
+      "count": 5765
+    },
+    {
+      "term": "RASH",
+      "count": 5367
+    },
+    {
+      "term": "ACUTE KIDNEY INJURY",
+      "count": 5342
+    },
+    {
+      "term": "OFF LABEL USE",
+      "count": 5059
+    },
+    {
+      "term": "FATIGUE",
+      "count": 5050
+    },
+    {
+      "term": "CHRONIC KIDNEY DISEASE",
+      "count": 5008
+    },
+    {
+      "term": "PYREXIA",
+      "count": 4920
+    }
+  ],
+  "event": "MYOCARDIAL INFARCTION",
+  "counts": {
+    "a": 782,
+    "b": 114212,
+    "c": 201585,
+    "d": 20376111,
+    "drug_total": 114994,
+    "event_total": 202367,
+    "grand_total": 20692690
+  },
+  "event_total": 202367
+}

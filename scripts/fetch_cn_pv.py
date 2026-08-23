@@ -97,13 +97,25 @@ def _extract_body(html):
     html = re.sub(r'<!--.*?-->', ' ', html, flags=re.S)
     # common content containers first
     body = None
-    for pat in (r'class="([^"]*contentbox[^"]*)"[^>]*>(.*?)(?:</div>\s*</div>|</div>\s*</td>)',
-                r'id="content"[^>]*>(.*?)</div>',
-                r'class="TRS_Editor"[^>]*>(.*?)</div>'):
-        m = re.search(pat, html, re.S | re.I)
+    # Pattern 1: class="contentbox..." (quoted class)
+    m = re.search(r'class="([^"]*contentbox[^"]*)"[^>]*>(.*?)(?:</div>\s*</div>|</div>\s*</td>)', html, re.S | re.I)
+    if m:
+        body = m.group(2)
+    else:
+        # Pattern 2: id="content"
+        m = re.search(r'id="content"[^>]*>(.*?)</div>', html, re.S | re.I)
         if m:
-            body = m.group(2) if m.lastindex and m.lastindex >= 2 else m.group(1)
-            break
+            body = m.group(1)
+        else:
+            # Pattern 3: class=TRS_Editor (quoted OR unquoted — cdr-adr.org.cn uses unquoted)
+            # Grab everything from TRS_Editor opening to </body> to get full article text
+            m = re.search(r'class=["\']?TRS_Editor["\']?[^>]*>(.*)', html, re.S | re.I)
+            if m:
+                body = m.group(1)
+                # Cut at </body> to avoid navigation/footer noise
+                body_end = body.find('</body>')
+                if body_end > 0:
+                    body = body[:body_end]
     if body is None:
         body = html
     txt = re.sub(r'<[^>]+>', ' ', body)

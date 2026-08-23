@@ -91,6 +91,23 @@ def compute(a, b, c, d, continuity=False):
             "note": "a==0: zero co-occurrence, conservative null "
                     "(continuity overridden)",
         }
+    # Zero cell in a non-a margin (b/c/d == 0) without continuity correction:
+    # 1/0 in the SE terms would overflow. Return a conservative null (no signal)
+    # rather than crash — real FAERS slices can yield empty margins for rare
+    # drug-event pairs. Continuity correction handles this gracefully, so only
+    # guard the no-correction path.
+    if (not continuity) and (b == 0 or c == 0 or d == 0):
+        return {
+            "table": {"a": a, "b": b, "c": c, "d": d, "N": b + c + d},
+            "ROR": {"value": 0.0, "ci_low": 0.0, "ci_high": 0.0, "signal": False},
+            "PRR": {"value": 0.0, "ci_low": 0.0, "ci_high": 0.0,
+                    "chi2": 0.0, "p_value": 1.0, "signal": False},
+            "IC": {"value": -10.0, "ci_low": -10.0, "ci_high": -10.0, "signal": False},
+            "EBGM": eb,
+            "continuity": False, "raw_counts": None, "signal_overall": False,
+            "note": "zero margin cell (b/c/d==0) without continuity: "
+                    "conservative null (no signal)",
+        }
     if continuity:
         a = a + 0.5; b = b + 0.5; c = c + 0.5; d = d + 0.5
     N = a + b + c + d
@@ -117,10 +134,12 @@ def compute(a, b, c, d, continuity=False):
     ic_lo = ic - 1.96 * math.sqrt(max(var_ic, 1e-9))
     ic_hi = ic + 1.96 * math.sqrt(max(var_ic, 1e-9))
 
+    # IC 信号判定：需点估计与下限均有实质余量（ic>0.1 且 ic_lo>0.1），
+    # 避免 IC025 仅略大于 0 的边际噪声（如 IC=0.126/ci_low=0.024）误判信号。
     signals = {
         "ROR": ror_lo > 1,
         "PRR": (prr >= 2) and (chi2 >= 4),
-        "IC": ic_lo > 0,
+        "IC": (ic > 0.1) and (ic_lo > 0.1),
         "EBGM": eb["signal"],
     }
     overall = any(signals.values())

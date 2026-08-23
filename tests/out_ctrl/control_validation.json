@@ -1,0 +1,177 @@
+{
+  "summary": {
+    "positive": {
+      "n": 5,
+      "agree": 3,
+      "rate": 0.6
+    },
+    "negative": {
+      "n": 4,
+      "agree": 4,
+      "rate": 1.0
+    },
+    "n_total": 9,
+    "records": [
+      {
+        "drug": "cerivastatin",
+        "event": "RABDOMYOLYSIS",
+        "group": "positive",
+        "expected": true,
+        "signal": null,
+        "note": "error: 404 Client Error: Not Found for url: https://api.fda.gov/drug/event.json?search=patient.drug.medicinalproduct%3A%22cerivastatin%22+AND+patient.reaction.reactionmeddrapt%3A%22RABDOMYOLYSIS%22&limit=1&api_key=sEeNXh56EmTD0J5iAPQ2JAYR2LejHr18s8R9dwL2"
+      },
+      {
+        "drug": "troglitazone",
+        "event": "HEPATITIS",
+        "group": "positive",
+        "expected": true,
+        "signal": true,
+        "ROR": 9.944,
+        "PRR": 9.589
+      },
+      {
+        "drug": "rosiglitazone",
+        "event": "MYOCARDIAL INFARCTION",
+        "group": "positive",
+        "expected": true,
+        "signal": true,
+        "ROR": 29.528,
+        "PRR": 23.109
+      },
+      {
+        "drug": "leflunomide",
+        "event": "HEPATIC FAILURE",
+        "group": "positive",
+        "expected": true,
+        "signal": false,
+        "ROR": 1.045,
+        "PRR": 1.045
+      },
+      {
+        "drug": "fluoroquinolone",
+        "event": "TENDON RUPTURE",
+        "group": "positive",
+        "expected": true,
+        "signal": true,
+        "ROR": 153.906,
+        "PRR": 141.164
+      },
+      {
+        "drug": "paracetamol",
+        "event": "RABDOMYOLYSIS",
+        "group": "negative",
+        "expected": false,
+        "signal": null,
+        "note": "error: 404 Client Error: Not Found for url: https://api.fda.gov/drug/event.json?search=patient.drug.medicinalproduct%3A%22paracetamol%22+AND+patient.reaction.reactionmeddrapt%3A%22RABDOMYOLYSIS%22&limit=1&api_key=sEeNXh56EmTD0J5iAPQ2JAYR2LejHr18s8R9dwL2"
+      },
+      {
+        "drug": "ibuprofen",
+        "event": "PNEUMONITIS",
+        "group": "negative",
+        "expected": false,
+        "signal": false,
+        "ROR": 1.092,
+        "PRR": 1.092
+      },
+      {
+        "drug": "amoxicillin",
+        "event": "MYOCARDIAL INFARCTION",
+        "group": "negative",
+        "expected": false,
+        "signal": false,
+        "ROR": 0.693,
+        "PRR": 0.695
+      },
+      {
+        "drug": "salbutamol",
+        "event": "HEPATIC FAILURE",
+        "group": "negative",
+        "expected": false,
+        "signal": false,
+        "ROR": 1.088,
+        "PRR": 1.087
+      }
+    ]
+  },
+  "records": [
+    {
+      "drug": "cerivastatin",
+      "event": "RABDOMYOLYSIS",
+      "group": "positive",
+      "expected": true,
+      "signal": null,
+      "note": "error: 404 Client Error: Not Found for url: https://api.fda.gov/drug/event.json?search=patient.drug.medicinalproduct%3A%22cerivastatin%22+AND+patient.reaction.reactionmeddrapt%3A%22RABDOMYOLYSIS%22&limit=1&api_key=sEeNXh56EmTD0J5iAPQ2JAYR2LejHr18s8R9dwL2"
+    },
+    {
+      "drug": "troglitazone",
+      "event": "HEPATITIS",
+      "group": "positive",
+      "expected": true,
+      "signal": true,
+      "ROR": 9.944,
+      "PRR": 9.589
+    },
+    {
+      "drug": "rosiglitazone",
+      "event": "MYOCARDIAL INFARCTION",
+      "group": "positive",
+      "expected": true,
+      "signal": true,
+      "ROR": 29.528,
+      "PRR": 23.109
+    },
+    {
+      "drug": "leflunomide",
+      "event": "HEPATIC FAILURE",
+      "group": "positive",
+      "expected": true,
+      "signal": false,
+      "ROR": 1.045,
+      "PRR": 1.045
+    },
+    {
+      "drug": "fluoroquinolone",
+      "event": "TENDON RUPTURE",
+      "group": "positive",
+      "expected": true,
+      "signal": true,
+      "ROR": 153.906,
+      "PRR": 141.164
+    },
+    {
+      "drug": "paracetamol",
+      "event": "RABDOMYOLYSIS",
+      "group": "negative",
+      "expected": false,
+      "signal": null,
+      "note": "error: 404 Client Error: Not Found for url: https://api.fda.gov/drug/event.json?search=patient.drug.medicinalproduct%3A%22paracetamol%22+AND+patient.reaction.reactionmeddrapt%3A%22RABDOMYOLYSIS%22&limit=1&api_key=sEeNXh56EmTD0J5iAPQ2JAYR2LejHr18s8R9dwL2"
+    },
+    {
+      "drug": "ibuprofen",
+      "event": "PNEUMONITIS",
+      "group": "negative",
+      "expected": false,
+      "signal": false,
+      "ROR": 1.092,
+      "PRR": 1.092
+    },
+    {
+      "drug": "amoxicillin",
+      "event": "MYOCARDIAL INFARCTION",
+      "group": "negative",
+      "expected": false,
+      "signal": false,
+      "ROR": 0.693,
+      "PRR": 0.695
+    },
+    {
+      "drug": "salbutamol",
+      "event": "HEPATIC FAILURE",
+      "group": "negative",
+      "expected": false,
+      "signal": false,
+      "ROR": 1.088,
+      "PRR": 1.087
+    }
+  ]
+}

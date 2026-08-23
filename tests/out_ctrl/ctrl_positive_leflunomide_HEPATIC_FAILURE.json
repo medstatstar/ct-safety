@@ -1,0 +1,63 @@
+{
+  "source": "FAERS",
+  "api": "openFDA drug/event.json",
+  "drug": "leflunomide",
+  "field": "patient.drug.medicinalproduct",
+  "date_from": null,
+  "date_to": null,
+  "drug_total": 67118,
+  "grand_total": 20692690,
+  "top_events": [
+    {
+      "term": "DRUG INEFFECTIVE",
+      "count": 25245
+    },
+    {
+      "term": "RHEUMATOID ARTHRITIS",
+      "count": 17235
+    },
+    {
+      "term": "PAIN",
+      "count": 13669
+    },
+    {
+      "term": "ARTHRALGIA",
+      "count": 12327
+    },
+    {
+      "term": "JOINT SWELLING",
+      "count": 12225
+    },
+    {
+      "term": "DRUG INTOLERANCE",
+      "count": 12087
+    },
+    {
+      "term": "FATIGUE",
+      "count": 11052
+    },
+    {
+      "term": "RASH",
+      "count": 10528
+    },
+    {
+      "term": "OFF LABEL USE",
+      "count": 9756
+    },
+    {
+      "term": "SYNOVITIS",
+      "count": 8889
+    }
+  ],
+  "event": "HEPATIC FAILURE",
+  "counts": {
+    "a": 148,
+    "b": 66970,
+    "c": 43656,
+    "d": 20581916,
+    "drug_total": 67118,
+    "event_total": 43804,
+    "grand_total": 20692690
+  },
+  "event_total": 43804
+}

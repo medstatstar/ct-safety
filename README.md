@@ -145,6 +145,8 @@ Never share your key in a chat message or put it in any file that ships with the
 
 There is **zero confidential data or information input** (B-tier: ordinary input + public retrieval). The NMPA main site is WAF-blocked (HTTP 412) and is intentionally excluded. Your openFDA key, if used, is **stored only locally** and sent **only over HTTPS to the official openFDA API**.
 
+**Bug-report endpoint disclosure (ct-base §5 / §20.3, mandatory).** When you confirm sending a (sanitized) error report via the in-skill bug reporter (`adapters/bug_report.py`), the skill sends **only** the 11-key whitelist envelope (skill name / version / error type / error code / engine status / your free-text `description` / locale / `query_origin` / session hash / retry count / test) to the unified bug-report endpoint `https://ct-bugreport.coze.site/run`. It sends **no analysis data and no personal identifiers** — `description` is the only free-text field and you review it before consent (hard boundary: no identifiable person/institution/subject info). If you decline, nothing is sent; if there is no cloud call this session, the report is saved locally instead (`save_local_report`, data never leaves the machine).
+
 Signal detection is screening only, not causal inference; regulatory submissions (DSUR / PBRER / labeling) require separate GCP / ICH E2 assessment.
 
 ## Advanced Reference
@@ -248,10 +250,10 @@ For feature requests, bug reports, or other feedback, please contact the author 
 
 ## Confidentiality Notice
 
-> The CT series consists of 16+ specialized domain skills, organized into four tiers — A, B, C, D — by "confidential-data-exfiltration risk + whether external retrieval is needed", providing full coverage of the entire new-drug clinical trial (Clinical Trial) lifecycle.
+> The CT series consists of 20+ specialized domain skills, organized into two tiers — A, B — by "confidential-data-exfiltration risk + whether external retrieval is needed", providing full coverage of the entire new-drug clinical trial (Clinical Trial) lifecycle.
 >
-> - **Tier A / B (non-confidential)**: run fully locally using only ordinary data; Tier B may need external public retrieval but involves no confidential information. These skills are published openly on GitHub.
-> - **Tier C / D (confidential)**: involve strictly confidential clinical-trial data and internal information from pharma sponsors (e.g., ct-analysis, ct-sdtm); Tier C is processed locally and never leaves the boundary, while Tier D additionally requires policy approval. These skills are designated for internal enterprise use only and are not publicly released at present.
+> - **Tier A (non-confidential · public)**: takes only ordinary (non-confidential) input; runs fully locally (`network=off`) or performs public retrieval (`network=public-retrieval`, e.g. ct-registry / ct-advisor) — never involves confidential information. Tier A skills are published openly on GitHub.
+> - **Tier B (confidential · internal)**: involve strictly confidential clinical-trial data and internal information from pharma sponsors (e.g., ct-analysis, ct-sdtm, ct-eligibility); Tier B is processed locally (`egress=none`, data never leaves the machine) or requires approved egress (`egress=approval-req`, e.g. ct-eligibility). These skills are designated for internal enterprise use only and are not publicly released at present.
 >
 > If you do have a genuine need for these confidential skills, please contact the author to request custom installation.
 >

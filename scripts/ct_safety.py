@@ -28,6 +28,10 @@ import fetch_fda_label
 import signal_score
 import drug_name_resolver
 import causality
+import signal_verification
+import meddra_coding
+import signal_prioritizer
+import psur_generator
 
 
 def _render_top_events(data, drug, cn_pv=None):
@@ -83,7 +87,8 @@ def run(drug, event, field, top, api_key, out_dir, with_cn_pv=False,
         date_from=None, date_to=None, benchmark_drugs=None, top_events_signal=None,
         continuity=True, trend=False, compare_drugs=None, with_fda_label=False,
         case_level=0, resolve_drug_name=True, with_causality=False,
-        naranjo_evidence=None):
+        naranjo_evidence=None, verify_signal=False, code_verbatim=None,
+        prioritize=False, psur=False, psur_period=None):
     # 预处理：非 ASCII 药物名 → 英文标准名（CLI 菜单确认）
     if resolve_drug_name and drug_name_resolver.is_non_ascii(drug):
         resolved, _ = drug_name_resolver.resolve(drug, event=event)
@@ -92,6 +97,25 @@ def run(drug, event, field, top, api_key, out_dir, with_cn_pv=False,
         else:
             print("[ct_safety] 药物名为空或已取消，退出。")
             return None
+
+    # P1-D: MedDRA verbatim -> PT coding helper (opt-in). If --code-verbatim is
+    # given and no --event, use the top suggested PT as the event to analyse.
+    # Pure local (built-in dict); the optional LLM mode is NOT auto-enabled.
+    if code_verbatim:
+        try:
+            vc = meddra_coding.VerbatimCoder()
+            coded = vc.code(code_verbatim, top_k=5)
+            print("[ct_safety][meddra-coding] %r ->" % code_verbatim)
+            for s in coded.get("suggested_pt", [])[:3]:
+                print("   - %s (code=%s, soc=%s, conf=%.2f, %s)"
+                      % (s["name"], s["code"], s.get("soc", ""),
+                         s["confidence"], s.get("match_type")))
+            print("   note: %s" % coded.get("coding_notes", ""))
+            if event is None and coded.get("suggested_pt"):
+                event = coded["suggested_pt"][0]["name"].upper()
+                print("[ct_safety][meddra-coding] using top PT as --event: %s" % event)
+        except Exception as e:  # noqa: BLE001 - best-effort helper
+            print("[WARN] meddra coding failed (continues): %s" % e)
 
     os.makedirs(out_dir, exist_ok=True)
     fetch_json = os.path.join(out_dir, "faers_fetch.json")
@@ -173,6 +197,20 @@ def run(drug, event, field, top, api_key, out_dir, with_cn_pv=False,
     elif trend and not event:
         print("[WARN] --trend requires --event; skipped")
 
+    # P1-C: signal verification workflow (temporal / dose-response / deconvolution).
+    # Reuses the trend quarterly series when --trend was also requested; otherwise
+    # fetches the monthly series itself. Dose-response & deconvolution need
+    # case-level data (--case-level) and gracefully report "insufficient" otherwise.
+    if verify_signal and event:
+        try:
+            verify_res = _run_verify_signal(drug, event, field, api_key, out_dir,
+                                            date_from, date_to, trend_res)
+            md += _render_verify(verify_res)
+        except Exception as e:
+            print("[WARN] signal verification failed (report continues): %s" % e)
+    elif verify_signal and not event:
+        print("[WARN] --verify-signal requires --event; skipped")
+
     # #3: multi-drug comparison via adjusted ROR (focal vs pooled reference)
     if compare_drugs and len(compare_drugs) >= 2 and event:
         try:
@@ -222,6 +260,30 @@ def run(drug, event, field, top, api_key, out_dir, with_cn_pv=False,
             md += _render_score(score_res, label_status, drug, event)
         except Exception as e:
             print("[WARN] signal score failed (report continues): %s" % e)
+
+    # P1-E (+K): signal prioritization & risk tiering. This layer ALSO consumes the
+    # label-gap (expectedness from --with-fda-label) and the temporal-trend (from
+    # --trend) -> this is exactly the "label-gap & temporal-trend signal
+    # prioritization layer" called for in upgrade K.
+    prio = None
+    if prioritize and res is not None and event:
+        try:
+            prio = _run_prioritize(drug, event, res, multi, label_status,
+                                  trend_res, cn_pv, bench, out_dir)
+            if prio:
+                md += _render_prioritize(prio, drug)
+        except Exception as e:
+            print("[WARN] prioritize failed (report continues): %s" % e)
+
+    # P1-F: PSUR/PBRER auto-report generation from the detected signals.
+    if psur and res is not None and event:
+        try:
+            psur_md = _run_psur(drug, event, res, multi, prio,
+                                psur_period or "latest", out_dir)
+            if psur_md:
+                md += "\n\n" + psur_md
+        except Exception as e:
+            print("[WARN] psur generation failed (report continues): %s" % e)
 
     # P0-A: Naranjo causal-attribution layer (qualitative supplement, INDEPENDENT
     # of disproportionality). Only attached when explicitly requested (--with-causality)
@@ -554,6 +616,190 @@ def _render_trend(trend):
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# P1-C: signal verification workflow (temporal / dose-response / deconvolution)
+# ---------------------------------------------------------------------------
+def _run_verify_signal(drug, event, field, api_key, out_dir,
+                      date_from, date_to, trend_res=None):
+    """Fetch (or reuse) the (drug, event) quarterly reporting series and run the
+    signal-verification workflow: temporal CUSUM/Poisson, dose-response and
+    deconvolution. Dose-response & deconvolution need case-level data (--case-level)
+    and report 'insufficient_data' when absent. Writes signal_verification.json."""
+    import os as _os
+    if trend_res and trend_res.get("quarterly"):
+        quarterly = trend_res["quarterly"]
+    else:
+        monthly = time_series.fetch_monthly_series(drug, event, field, api_key,
+                                                   date_from, date_to)
+        quarterly = time_series.to_quarterly(monthly)
+    ts_data = [{"period": q["q"], "count": q["count"]} for q in quarterly]
+    temporal = signal_verification.temporal_analysis(drug, event, ts_data)
+    dose = signal_verification.dose_response_analysis(drug, event, [])
+    deconv = signal_verification.deconvolution_analysis(drug, event, "", [])
+    res = {"drug": drug, "event": event, "temporal": temporal,
+           "dose_response": dose, "deconvolution": deconv}
+    out = _os.path.join(out_dir, "signal_verification.json")
+    with open(out, "w", encoding="utf-8") as f:
+        json.dump(res, f, ensure_ascii=False, indent=2)
+    print("[OK] signal verification ->", out)
+    return res
+
+
+def _render_verify(v):
+    t = v.get("temporal") or {}
+    lines = ["\n\n## 信号验证工作流 / Signal Verification (P1-C)\n"]
+    lines.append("药物 Drug: **%s** / 事件 Event: **%s**\n" % (v.get("drug"), v.get("event")))
+    lines.append("- 时序证据强度 Temporal evidence: **%s**" % t.get("evidence_level", "N/A"))
+    cusum = t.get("cusum") or {}
+    poi = t.get("poisson_trend") or {}
+    if cusum:
+        lines.append("  - CUSUM: %s (max=%.2f)" % (cusum.get("trend"), cusum.get("cusum_max", 0)))
+    if poi:
+        lines.append("  - Poisson 趋势: %s (p=%.4f, %s)" % (
+            poi.get("trend"), poi.get("p_value", 1),
+            "显著" if poi.get("significant") else "不显著"))
+    lines.append("- 时序结论 Conclusion: %s" % t.get("conclusion", "—"))
+    d = v.get("dose_response") or {}
+    if d.get("error"):
+        lines.append("- 剂量-反应 Dose-response: %s（需 --case-level 个案级剂量数据）" % d.get("error"))
+    dc = v.get("deconvolution") or {}
+    lines.append("- 去卷积 Deconvolution: %s" % dc.get("conclusion", dc.get("deconvolution", "—")))
+    lines.append("\n> 验证工作流为信号确证补充：时序趋势增强报告数突变的可信度；剂量-反应与去卷积需个案级 FAERS 数据方能计算，公开计数接口仅支持时序维度。")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# P1-E (+K): signal prioritization & risk tiering layer
+#   K = the layer ALSO ingests label-gap (expectedness from --with-fda-label)
+#       and temporal-trend (from --trend) as two of its scoring dimensions.
+# ---------------------------------------------------------------------------
+_SOC_SEVERITY = {
+    "Cardiac disorders": "hospitalization",
+    "Hepatobiliary disorders": "hospitalization",
+    "Vascular disorders": "life_threatening",
+    "Respiratory, thoracic and mediastinal disorders": "hospitalization",
+    "Renal and urinary disorders": "hospitalization",
+    "Blood and lymphatic system disorders": "hospitalization",
+    "Nervous system disorders": "hospitalization",
+    "Immune system disorders": "life_threatening",
+    "Psychiatric disorders": "important_medical_event",
+    "Endocrine disorders": "requires_intervention",
+    "Eye disorders": "requires_intervention",
+    "Infections and infestations": "important_medical_event",
+    "Skin and subcutaneous tissue disorders": "moderate",
+    "Gastrointestinal disorders": "moderate",
+    "Musculoskeletal and connective tissue disorders": "moderate",
+    "Metabolism and nutrition disorders": "moderate",
+    "General disorders and administration site conditions": "mild",
+}
+
+
+def _soc_severity(soc):
+    return _SOC_SEVERITY.get(soc, "moderate")
+
+
+def _run_prioritize(drug, event, res, multi, label_status, trend_res,
+                   cn_pv, bench, out_dir):
+    """Assemble detected signals (single + multi-event) and prioritize by risk tier.
+    label_gap (K): an UNLABELED event is treated as a new signal; temporal-trend (K):
+    an anomaly raises the trend dimension."""
+    import os as _os
+    label_gap = (label_status == "unlabeled")
+    novelty = ("new_signal" if label_gap
+               else ("expected_event" if label_status == "labeled" else "unknown"))
+    trend_flag = bool((trend_res or {}).get("detection", {}).get("anomaly_flag"))
+    trend_dim = "increasing" if trend_flag else ("stable" if trend_res else "unknown")
+    has_cn = bool(cn_pv and cn_pv.get("hit_count"))
+    has_bench = bool(bench)
+    if has_cn and has_bench:
+        multi_src = "three_source"
+    elif has_cn or has_bench:
+        multi_src = "two_source"
+    else:
+        multi_src = "single_source"
+
+    signals = []
+    if res is not None and event:
+        signals.append({
+            "signal_id": "S1", "drug": drug, "event": event,
+            "severity": _soc_severity(disproportionality.map_soc(event)),
+            "novelty": novelty, "frequency": int(res["table"]["a"]),
+            "trend": trend_dim, "multi_source": multi_src,
+        })
+    if multi:
+        for i, r in enumerate(
+                [x for x in multi.get("events", []) if x.get("available")], start=2):
+            ev = r["event"]
+            signals.append({
+                "signal_id": "M%d" % i, "drug": drug, "event": ev,
+                "severity": _soc_severity(disproportionality.map_soc(ev)),
+                "novelty": "unknown", "frequency": int(r["table"]["a"]),
+                "trend": "unknown", "multi_source": multi_src,
+            })
+    if not signals:
+        print("[WARN] no signals to prioritize")
+        return None
+    pr = signal_prioritizer.SignalPrioritizer()
+    results = pr.prioritize(signals)
+    out = _os.path.join(out_dir, "priority.json")
+    with open(out, "w", encoding="utf-8") as f:
+        json.dump(results, f, ensure_ascii=False, indent=2)
+    print("[OK] priority ->", out)
+    return results
+
+
+def _render_prioritize(results, drug):
+    lines = ["\n\n## 信号优先级排序与风险分级 / Signal Prioritization & Risk Tier (P1-E)\n"]
+    lines.append("（合并 label-gap 预期性 + 时间趋势维度 = K 的优先级层）\n")
+    lines.append("| 排名 | 药物 | 事件 | 得分 | 风险等级 | 建议 |")
+    lines.append("|---|---|---|---|---|---|")
+    for i, r in enumerate(results, 1):
+        lines.append("| %d | %s | %s | %.2f | %s | %s |" % (
+            i, r["drug"], r["event"], r["priority_score"],
+            r["risk_level"], r["action_recommendation"]))
+    lines.append("\n> 风险分级为自动化综合研判辅助（临床严重程度 × 新颖性 × 频率 × 趋势 × 多源），非监管结论；须医学审核。")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# P1-F: PSUR/PBRER auto-report generation
+# ---------------------------------------------------------------------------
+def _run_psur(drug, event, res, multi, prio, period, out_dir):
+    """Build a signal list (single + multi-event) and generate a PSUR/PBRER
+    markdown report. Risk tier from the prioritization layer (P1-E) when available.
+    Writes psur.md."""
+    import os as _os
+    prio_by_event = {p["event"]: p for p in (prio or [])}
+
+    def _row(d, ev, r):
+        p = prio_by_event.get(ev, {})
+        prr = (r.get("PRR") or {}).get("value")
+        ror = (r.get("ROR") or {}).get("value")
+        ebgm = (r.get("EBGM") or {}).get("value")
+        return {
+            "drug": d, "event": ev,
+            "prr": prr, "ror": ror, "ebgm": ebgm,
+            "status": "new",
+            "risk_level": p.get("risk_level", "MEDIUM"),
+            "action": p.get("action_recommendation", "常规评估"),
+        }
+
+    signals = []
+    if res is not None and event:
+        signals.append(_row(drug, event, res))
+    if multi:
+        for r in [x for x in multi.get("events", []) if x.get("available")]:
+            signals.append(_row(drug, r["event"], r))
+    if not signals:
+        return None
+    report = psur_generator.generate_psur(signals, period, fmt="md")
+    out = _os.path.join(out_dir, "psur.md")
+    with open(out, "w", encoding="utf-8") as f:
+        f.write(report)
+    print("[OK] PSUR ->", out)
+    return report
+
+
 def _run_compare_drugs(focal, refs, event, field, top, api_key, out_dir,
                        date_from, date_to):
     """#3: compare the FOCAL drug against a POOLED reference group on a single
@@ -827,6 +1073,24 @@ def main():
     ap.add_argument("--naranjo-evidence", help="Naranjo 证据 JSON 路径：单个 7 键 "
                     "evidence dict，或 FAERS 病例 dict 列表（用于从病例聚合）。"
                     "缺省则尝试用 --case-level 病例聚合，或按 unknown 兜底。")
+    # ---- P1 upgrades (2026-08-16, v0.1.38) ----
+    # P1-C: signal verification workflow (temporal / dose-response / deconvolution)
+    ap.add_argument("--verify-signal", action="store_true",
+                    help="P1-C: 运行信号验证工作流（时序 CUSUM/Poisson / 剂量-反应 / "
+                         "去卷积）于 --drug/--event（需 --event 与 --run；复用 --trend 序列）")
+    # P1-D: MedDRA verbatim -> PT coding helper (local default; LLM opt-in)
+    ap.add_argument("--code-verbatim", default=None,
+                    help="P1-D: 将 verbatim AE 术语编码为建议 PT（内置字典；LLM 模式 "
+                         "为 opt-in，不自动开启）。未给 --event 时以首选项 PT 作为事件")
+    # P1-E (+K): signal prioritization & risk tiering (ingests label-gap + trend)
+    ap.add_argument("--prioritize", action="store_true",
+                    help="P1-E: 按风险分级对信号排序（合并 --with-fda-label 的 label-gap "
+                         "预期性 + --trend 的时间趋势维度 = K 的优先级层）")
+    # P1-F: PSUR/PBRER auto-report generation
+    ap.add_argument("--psur", action="store_true",
+                    help="P1-F: 由检测到的信号自动生成 PSUR/PBRER Markdown 报告（psur.md）")
+    ap.add_argument("--psur-period", default=None,
+                    help="P1-F: PSUR 报告期间标签（如 2025-Q1 / 2026H1）")
     args = ap.parse_args()
 
     # --validate-controls runs independently of any specific drug/event
@@ -857,7 +1121,9 @@ def main():
         case_level=args.case_level,
         resolve_drug_name=not args.no_resolve_drug_name,
         with_causality=args.with_causality,
-        naranjo_evidence=args.naranjo_evidence)
+        naranjo_evidence=args.naranjo_evidence,
+        verify_signal=args.verify_signal, code_verbatim=args.code_verbatim,
+        prioritize=args.prioritize, psur=args.psur, psur_period=args.psur_period)
 
 
 if __name__ == "__main__":
