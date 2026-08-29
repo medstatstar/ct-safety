@@ -18,6 +18,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fetch_faers
+import faers_dedup
 import disproportionality
 import report as report_mod
 import report_xlsx
@@ -88,7 +89,8 @@ def run(drug, event, field, top, api_key, out_dir, with_cn_pv=False,
         continuity=True, trend=False, compare_drugs=None, with_fda_label=False,
         case_level=0, resolve_drug_name=True, with_causality=False,
         naranjo_evidence=None, verify_signal=False, code_verbatim=None,
-        prioritize=False, psur=False, psur_period=None):
+        prioritize=False, psur=False, psur_period=None,
+        case_dedup=True, dedup_jaccard=0.8, drop_suspected_dupes=False):
     # 预处理：非 ASCII 药物名 → 英文标准名（CLI 菜单确认）
     if resolve_drug_name and drug_name_resolver.is_non_ascii(drug):
         resolved, _ = drug_name_resolver.resolve(drug, event=event)
@@ -158,6 +160,7 @@ def run(drug, event, field, top, api_key, out_dir, with_cn_pv=False,
 
     # ② case_id linkage (R14): fetch individual FAERS case safety reports when requested
     cases_data = None
+    dedup_summary = None
     if case_level and event:
         faers_cases_json = os.path.join(out_dir, "faers_cases.json")
         try:
@@ -167,6 +170,30 @@ def run(drug, event, field, top, api_key, out_dir, with_cn_pv=False,
             cases_data = (cr or {}).get("cases")
         except Exception as e:  # noqa: BLE001 - best-effort; degrade gracefully
             print("[ct_safety][case-level] fetch failed: %s" % e)
+
+        # P1-A: case-level de-duplication (pure local, zero extra network).
+        # FAERS re-ingests the same case as follow-up report versions and via
+        # multiple reporters, so a raw individual-case listing over-counts.
+        # L1 (version collapse) is a correctness fix and is on by default;
+        # L2 (suspected duplicates) only FLAGS unless --drop-suspected-dupes,
+        # because silently dropping PV cases is dangerous.
+        if case_dedup and cases_data:
+            try:
+                deduped, dedup_summary = faers_dedup.dedup_cases(
+                    cases_data, jaccard_threshold=dedup_jaccard,
+                    drop_suspected=drop_suspected_dupes)
+                cases_data = deduped
+                dedup_json = os.path.join(out_dir, "faers_cases_dedup.json")
+                with open(dedup_json, "w", encoding="utf-8") as fp:
+                    json.dump({"summary": dedup_summary, "cases": deduped},
+                              fp, ensure_ascii=False, indent=2)
+                print("[OK] case-level dedup -> %s (raw %d -> final %d)" % (
+                    dedup_json, dedup_summary["raw_cases"],
+                    dedup_summary["final_cases"]))
+                md += _render_case_dedup(dedup_summary)
+            except Exception as e:  # noqa: BLE001 - never break the report
+                print("[WARN] case-level dedup failed (report continues): %s" % e)
+                dedup_summary = None
 
     # R5: cross-competitor safety benchmarking — same event, horizontal comparison
     bench = None
@@ -948,6 +975,50 @@ def _render_causality(assessment, drug, event):
     return "\n".join(lines)
 
 
+def _render_case_dedup(s):
+    """P1-A: render the case-level de-duplication audit trail as a report section.
+
+    FAERS re-ingests the same case as follow-up report versions and through
+    multiple reporters, so a raw individual-case listing over-counts. This
+    section states exactly how many records were collapsed / flagged and — most
+    importantly — that disproportionality (PRR/ROR/IC/EBGM) is NOT corrected,
+    because those counts come from openFDA aggregate endpoints.
+    """
+    if not s:
+        return ""
+    raw = s.get("raw_cases", 0)
+    final = s.get("final_cases", 0)
+    lines = ["\n\n## 个案级去重 / Case-level de-duplication (P1-A)\n"]
+    lines.append("| 环节 Stage | 计数 Count |")
+    lines.append("|---|---|")
+    lines.append("| 原始个案 Raw cases | %d |" % raw)
+    lines.append("| L1 后续报告版本折叠 Version collapse (same safetyreportid) | -%d |"
+                 % s.get("l1_versions_superseded", 0))
+    lines.append("| L1 后个案 After L1 | %d |" % s.get("after_l1_version_collapse", 0))
+    lines.append("| L2 疑似重复 Suspected duplicates (flagged) | %d（exact %d / probable %d，"
+                 "%d 簇 clusters） |" % (
+                     s.get("l2_suspected_duplicate_cases", 0), s.get("l2_exact", 0),
+                     s.get("l2_probable", 0), s.get("l2_clusters", 0)))
+    if s.get("drop_suspected"):
+        lines.append("| L2 已剔除 Dropped (--drop-suspected-dupes) | -%d |"
+                     % s.get("l2_dropped", 0))
+    lines.append("| **最终个案 Final cases** | **%d** |" % final)
+    if raw and final != raw:
+        lines.append("\n- 去重率 De-duplication rate: **%.1f%%**（%d → %d）"
+                     % (100.0 * (raw - final) / raw, raw, final))
+    lines.append("- L2 Jaccard 阈值 threshold: **%.2f**（人口学一致 + 反应 PT 集合相似度）"
+                 % float(s.get("jaccard_threshold", 0.8)))
+    if not s.get("drop_suspected"):
+        lines.append("- L2 策略 Policy: **仅标记不删除 flag-only**"
+                     "（药物警戒场景静默删除病例有风险；需剔除请显式加 `--drop-suspected-dupes`）")
+    lines.append("- 逐条依据见 `faers_cases_dedup.json` 的 `dedup_reason` / `dedup_level` 字段。")
+    lines.append("\n> ⚠️ **重要局限 Limitation**：%s" % s.get("limitation", ""))
+    lines.append("> 换言之：本段修正的是**个案清单**的重复计数偏倚，"
+                 "**不修正**上文 PRR / ROR / IC / EBGM——后者的分子分母来自 openFDA 聚合端点，"
+                 "本地无从拆到病例层面。解读信号强度时须记住 FAERS 计数本身仍含重复上报偏倚。")
+    return "\n".join(lines)
+
+
 def _run_validate_controls(out_dir, api_key, field, top, continuity=True):
     """--validate-controls: fetch known positive/negative control pairs from FAERS,
     compute disproportionality (with continuity correction), and check whether the
@@ -1063,6 +1134,15 @@ def main():
     ap.add_argument("--case-level", type=int, default=0,
                     help="R14 ②: fetch up to N individual FAERS case safety reports "
                          "(case_id linkage). 0 = off.")
+    # P1-A: case-level de-duplication of the individual-case listing (pure local)
+    ap.add_argument("--no-case-dedup", action="store_true",
+                    help="P1-A: 关闭个案级去重（默认开启：L1 折叠同一 safetyreportid 的"
+                         "后续报告版本，L2 仅标记疑似重复病例）")
+    ap.add_argument("--dedup-jaccard", type=float, default=0.8,
+                    help="P1-A: L2 疑似重复的反应 PT 集合 Jaccard 阈值（默认 0.8，越低越激进）")
+    ap.add_argument("--drop-suspected-dupes", action="store_true",
+                    help="P1-A: L2 疑似重复簇仅保留 1 条代表（默认只标记不删除；"
+                         "药物警戒场景静默删除病例有风险，需显式开启）")
     # 非 ASCII 药物名自动翻译为英文名
     ap.add_argument("--no-resolve-drug-name", action="store_true",
                     help="禁用非 ASCII（如中文）药物名自动翻译为英文名的预处理")
@@ -1123,7 +1203,9 @@ def main():
         with_causality=args.with_causality,
         naranjo_evidence=args.naranjo_evidence,
         verify_signal=args.verify_signal, code_verbatim=args.code_verbatim,
-        prioritize=args.prioritize, psur=args.psur, psur_period=args.psur_period)
+        prioritize=args.prioritize, psur=args.psur, psur_period=args.psur_period,
+        case_dedup=not args.no_case_dedup, dedup_jaccard=args.dedup_jaccard,
+        drop_suspected_dupes=args.drop_suspected_dupes)
 
 
 if __name__ == "__main__":

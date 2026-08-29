@@ -1,5 +1,28 @@
 # Changelog — ct-safety
 
+## v0.9.1 (2026-08-29) · FAERS 个案级去重（P1-A，本地，未发布）
+
+### Added / 病例级重复计数偏倚修正
+- **新增 `scripts/faers_dedup.py`（纯本地、零新增联网）**：两级 FAERS 个案去重。
+  - **L1 版本折叠**：同一 `safetyreportid` 的后续报告（follow-up）只保留最高 `safetyreportversion`，其余标记 superseded。这是**纯正确性修复**——FAERS 对同一病例的每次版本更新都会重新入库，原始个案清单必然重复计数。默认开启。
+  - **L2 疑似重复探测**：人口学指纹（性别 / 归一年龄 / 国家）一致且反应 PT 集合 Jaccard ≥ 阈值（默认 0.8）→ 同簇；完全一致记 `exact`，相似记 `probable`。**默认只标记不删除**（药物警戒场景静默删病例有风险），需显式 `--drop-suspected-dupes` 才每簇留 1 条代表。
+  - `normalize_age()` 归一 openFDA 年龄单位 800–805（小时/日/周/月/年/十年）为整数年，避免「45 岁」与「540 月」被判为不同人。
+  - 空证据（无人口学且无 PT）**永不聚类**，防止缺字段记录被误并。
+- **`scripts/fetch_faers.py` 扩展个案字段**：从既有 openFDA 响应中额外提取 `safetyreportversion / patientsex / patientonsetage / patientonsetageunit / occurcountry / reportercountry`——去重所需，**零新增请求**。此前仅留 `safetyreportid`，无从判重。
+- **`scripts/ct_safety.py` 接入编排层**：`--case-level` 抓取后自动跑去重，去重后的个案供 Naranjo 聚合（`causality.from_faers_cases`）使用，避免重复病例扭曲因果归因；写出 `faers_cases_dedup.json`（含逐条 `dedup_reason` / `dedup_level`），并在报告中新增「个案级去重 / Case-level de-duplication」段落。
+- **新增 CLI**：`--no-case-dedup`（关闭）、`--dedup-jaccard`（L2 阈值）、`--drop-suspected-dupes`（剔除而非仅标记）。
+
+### Note / 明示局限（写入报告正文，不做过度声称）
+- 去重**只作用于个案清单**。PRR / ROR / IC / EBGM 的分子分母来自 openFDA **聚合端点**，本地无从拆到病例层面，**故不成比例分析结果未被此模块修正**。该局限同时写入 `summary.limitation` 与报告段落，避免读者误认为信号已去偏。
+
+### Compatibility / 兼容性
+- 新增字段均为增量，旧 `faers_cases.json` 缺字段时优雅降级（缺人口学即不参与 L2 聚类）；`--no-case-dedup` 可完全回退旧行为。
+
+### Verified / 验证
+- `py_compile` 通过（`fetch_faers.py` / `faers_dedup.py` / `ct_safety.py`）。
+- 离线冒烟 `_smoke_safety_dedup.py` **18/18 断言 PASS**：L1 折叠、L2 exact（含 540 月 = 45 年年龄归一）、L2 probable（Jaccard 0.67 < 0.8 默认不误并）、空证据不聚类、独立病例判 unique、`--drop-suspected` 每簇留 1、`--jaccard 0.6` 调参命中、二次运行幂等。
+- 报告段落渲染 + flag-only / drop 两种策略端到端核对通过（5 例样本：raw 5 → L1 后 4 → flag-only 保留 4 / drop 后 3）。
+
 ## v0.9.0 (2026-08-22) · 增加 bug report 功能（ct-base §20.3 接入补齐）
 
 ### Added / bug report 接入（ct-base §20.3 + §20.3.7）

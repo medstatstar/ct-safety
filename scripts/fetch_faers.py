@@ -247,10 +247,20 @@ def fetch_case_reports(drug, event=None, field="patient.drug.medicinalproduct",
                        date_from=None, date_to=None, timeout=120, retries=3):
     """Individual case safety reports for a drug (optionally drug-event) pair.
 
-    Returns a list of case dicts: {safetyreportid, receivedate, seriousness,
-    outcome, reaction_pt[], drug[]}. Enables per-case traceability (the R14
-    signal chain in ct-pipeline). Public FAERS only; no confidential data.
+    Returns a list of case dicts: {safetyreportid, safetyreportversion,
+    receivedate, seriousness, outcome, reaction_pt[], drug[], patientsex,
+    patientonsetage, patientonsetageunit, occurcountry, reportercountry}.
+    Enables per-case traceability (the R14 signal chain in ct-pipeline).
+    Public FAERS only; no confidential data.
     Use --run (or run=True) to execute the network request.
+
+    P1-A (2026-08-29): the demographic + version fields are extracted so that
+    `faers_dedup.py` can collapse follow-up report versions and flag suspected
+    duplicate cases. FAERS is well known to contain the same case multiple
+    times (initial + follow-up submissions, and the same case reported by
+    manufacturer and consumer), which inflates raw case counts. These are
+    extracted from the response already being fetched -- no extra request,
+    no extra network traffic.
     """
     if requests is None:
         raise RuntimeError("requests not installed: pip install requests")
@@ -271,13 +281,21 @@ def fetch_case_reports(drug, event=None, field="patient.drug.medicinalproduct",
         pat = rec.get("patient", {}) or {}
         reacts = pat.get("reaction", []) or []
         drugs = pat.get("drug", []) or []
+        src = rec.get("primarysource", {}) or {}
         cases.append({
             "safetyreportid": rec.get("safetyreportid"),
+            # P1-A: version + demographics feed the local de-duplication layer.
+            "safetyreportversion": rec.get("safetyreportversion"),
             "receivedate": rec.get("receivedate"),
             "seriousness": rec.get("serious") or rec.get("seriousness"),
             "outcome": pat.get("patientoutcome") or pat.get("outcome"),
             "reaction_pt": [x.get("reactionmeddrapt") for x in reacts],
             "drug": [d.get("medicinalproduct") or d.get("patientdrugname") for d in drugs],
+            "patientsex": pat.get("patientsex"),
+            "patientonsetage": pat.get("patientonsetage"),
+            "patientonsetageunit": pat.get("patientonsetageunit"),
+            "occurcountry": rec.get("occurcountry"),
+            "reportercountry": src.get("reportercountry"),
         })
     result = {"source": "FAERS", "drug": drug, "event": event,
               "n_fetched": len(cases), "cases": cases}

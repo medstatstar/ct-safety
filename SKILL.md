@@ -1,14 +1,14 @@
 ---
 slug: ct-safety
-displayName: 临床试验安全信号专家 / Clinical Trial Safety Signal
+displayName: Clinical Trial Safety Signal / 临床试验安全信号专家
 name: ct-safety
 cn_name: 临床试验安全信号专家
-version: 0.9.0
+version: 0.9.1
 invocable: true
 required_commands: [python]
 summary: "基于 FDA FAERS 公开不良事件数据做 disproportionality 信号检测（PRR / ROR / IC / EBGM），辅助药物安全性监测；可选接入中国官方药物警戒通报（cdr-adr.org.cn）作定性佐证。检索公开不良事件数据（B 档：普通输入 + 对外检索）。"
 license: MIT
-description: "基于 FDA FAERS（经 openFDA 公开 REST API）做药物-事件 disproportionality 信号检测，计算 PRR / ROR / IC / EBGM 及 95% 置信区间与信号判定；一次性流水线默认产出两份核心交付物——① 可渲染的 HTML 报告（可视化结论）② XLSX 数据簿（含全部原始 FAERS 计数、2×2 表、四种方法及 FDA 标签/CN-PV/评分明细，供逐条查阅与审计）；同时保留 JSON / Markdown 作兼容备份。可选 --with-cn-pv 增加中国官方药物警戒通报（cdr-adr.org.cn）定性检索作信号佐证。所有数据均为公开不良事件报告，不输入任何保密数据或信息，B 档（普通数据输入 + 对外检索），可快速推广技能。 / Signal detection on FDA FAERS (via openFDA public REST API): computes PRR / ROR / IC / EBGM with 95% CIs and signal flags from the drug-event 2x2 table. The one-shot pipeline emits TWO core deliverables by default — ① a renderable HTML report (visual conclusion) and ② an XLSX workbook holding ALL raw FAERS counts, the 2x2 table, the four methods, and FDA-label / CN-PV / score details for line-by-line audit; JSON / Markdown are kept as compatibility backups. Optional --with-cn-pv adds qualitative China official PV bulletin search (cdr-adr.org.cn) as signal corroboration. All data are public adverse-event reports; zero confidential data or information input — B-tier quickly-adoptable."
+description: "Signal detection on FDA FAERS (via openFDA public REST API): computes PRR / ROR / IC / EBGM with 95% CIs and signal flags from the drug-event 2x2 table. The one-shot pipeline emits TWO core deliverables by default — ① a renderable HTML report (visual conclusion) and ② an XLSX workbook holding ALL raw FAERS counts, the 2x2 table, the four methods, and FDA-label / CN-PV / score details for line-by-line audit; JSON / Markdown are kept as compatibility backups. Optional --with-cn-pv adds qualitative China official PV bulletin search (cdr-adr.org.cn) as signal corroboration. All data are public adverse-event reports; zero confidential data or information input — B-tier quickly-adoptable. / 基于 FDA FAERS（经 openFDA 公开 REST API）做药物-事件 disproportionality 信号检测，计算 PRR / ROR / IC / EBGM 及 95% 置信区间与信号判定；一次性流水线默认产出两份核心交付物——① 可渲染的 HTML 报告（可视化结论）② XLSX 数据簿（含全部原始 FAERS 计数、2×2 表、四种方法及 FDA 标签/CN-PV/评分明细，供逐条查阅与审计）；同时保留 JSON / Markdown 作兼容备份。可选 --with-cn-pv 增加中国官方药物警戒通报（cdr-adr.org.cn）定性检索作信号佐证。所有数据均为公开不良事件报告，不输入任何保密数据或信息，B 档（普通数据输入 + 对外检索），可快速推广技能。"
 triggers:
   - "FAERS safety signal"
   - "安全性信号分析"
@@ -37,14 +37,22 @@ permissions:
 
 ## Language
 
-Pick the README that matches your language for human-readable, language-specific guides:
+- **English guide** → [README.md](https://github.com/medstatstar/ct-safety/blob/main/README.md) · **中文指南** → [README_zh-CN.md](https://github.com/medstatstar/ct-safety/blob/main/README_zh-CN.md)
+- Bilingual auto-switch: the answer language follows the user's question language (English question → English answer, Chinese question → Chinese answer).
 
-- **English guide** → [README.md](./README.md)
-- **中文指南** → [README_zh-CN.md](./README_zh-CN.md)
+This skill responds in the user's current input language and auto-detects / switches accordingly. The runtime scripts embed a locale check so all user-facing prompts switch to Chinese on a `zh-*` locale and to English otherwise. Code comments and documentation are English-only; the SKILL.md body, `references/*.md`, and `AGENTS.md` are English-only and agent-facing. For end-to-end walkthroughs and troubleshooting in your language, open the README above.
 
-This skill responds in the user's current input language and auto-detects / switches accordingly. The runtime scripts embed a locale check so all user-facing prompts switch to Chinese on a `zh-*` locale and to English otherwise. Code comments and documentation are English-only.
+## Cross-turn Continuity (跨轮连续性 · 必须)
 
-The SKILL.md body, `references/*.md`, and `AGENTS.md` are English-only and agent-facing; runtime command prompts switch to Chinese / English by locale. For end-to-end walkthroughs and troubleshooting in your language, open the README above.
+> 家族标准见 `ct-base/references/continuity.md`（模式 A）。多轮追问（换 event / 对比另一药 / 换 measure）时，前轮的检索设定必须无损继承，**不能只凭 LLM 记忆**。
+
+每次分析后**回显设定块**：
+
+```
+## 当前检索设定：drug=… | event=… | comparator=… | measure=PRR | source=FAERS
+```
+
+追问时 LLM **必须读取对话中最近一个设定块，只覆盖变化字段**（如只改 `event`），其余原样继承，再发远端/再跑脚本。
 
 # Clinical Trial Safety Signal
 
@@ -57,9 +65,7 @@ The SKILL.md body, `references/*.md`, and `AGENTS.md` are English-only and agent
 - **Data flow (transparent).** Reads ONLY public sources — FDA FAERS / openFDA and, optionally, the public columns of cdr-adr.org.cn. Writes outputs SOLELY to the user-specified `--out-dir` (default: current working directory). **No system-path or hidden logging**; any operational log (e.g. `safety_err.log`) is written ONLY under `--out-dir` (e.g. `out_live/`), never outside it, and FAERS raw responses are not persisted unless the user explicitly saves them. Zero confidential data input; no user data is transmitted externally.
 - **Dev artifacts excluded from the runtime package.** The `tests/` directory (regression harness) is shipped only in the source repo, not in the installed runtime package.
 
-## Purpose
-
-Run pharmacovigilance disproportionality analysis on FDA FAERS public adverse-event data to surface potential drug–event safety signals (PRR / ROR / IC / EBGM), supporting clinical-trial safety surveillance and label / signal screening. Optional China official PV bulletins (cdr-adr.org.cn) provide qualitative corroboration only.
+## PurposeRun pharmacovigilance disproportionality analysis on FDA FAERS public adverse-event data to surface potential drug–event safety signals (PRR / ROR / IC / EBGM), supporting clinical-trial safety surveillance and label / signal screening. Optional China official PV bulletins (cdr-adr.org.cn) provide qualitative corroboration only.
 
 ## Data Sources
 
@@ -113,6 +119,7 @@ Full formulas, thresholds, EBGM/MGPS math, FDR, aROR, trend, and the score/tier 
 | 信号优先级排序与风险分级（`--prioritize`） | 检测到的信号 | 多维评分（严重度×新颖性×频率×趋势×多源）→ CRITICAL/HIGH/MEDIUM/LOW |
 | Label-gap & 时间趋势优先级层（随 `--prioritize`） | `--with-fda-label` + `--trend` | 未预期风险(label-gap)+异常趋势自动抬升优先级（K 项） |
 | PSUR/PBRER 自动报告（`--psur`） | 检测到的信号 | 生成 CIOMS/ICH E2C(R2) 格式 PSUR Markdown（psur.md） |
+| Case-level de-duplication (on by default with `--case-level`) | FAERS individual case reports | L1 collapses follow-up `safetyreportversion` per `safetyreportid`; L2 flags suspected duplicates (demographic fingerprint + reaction-PT Jaccard, default 0.8) — flag-only unless `--drop-suspected-dupes`. Applies to the case listing ONLY; PRR/ROR/IC/EBGM come from aggregate endpoints and are NOT corrected. Disable via `--no-case-dedup` |
 | Non-ASCII drug-name auto-translate | — | `--drug 阿司匹林` → `aspirin`; disable `--no-resolve-drug-name` |
 
 ## Requirements
@@ -127,6 +134,7 @@ Full formulas, thresholds, EBGM/MGPS math, FDR, aROR, trend, and the score/tier 
 - Network: retrieval (present / `--out-xlsx`) runs lightweight openFDA `count` facet queries (seconds, no case download); **case-level download requires explicit `--run`** (throttled by HARD_CAP=10000).
 - Reads FAERS public reports ONLY — **zero confidential data or information input** (B-tier).
 - China PV bulletins are **qualitative narrative** — NO per-drug-event counts; must **NOT** feed disproportionality; only corroborate a FAERS signal.
+- FAERS re-ingests the same case as follow-up versions and via multiple reporters. Case-level de-duplication fixes the **individual-case listing** only; disproportionality counts come from openFDA **aggregate** endpoints and therefore still carry duplicate-reporting bias. Never claim a signal is "de-duplicated".
 - Signal detection is for screening, not causal conclusion; regulatory submission (DSUR / PBRER / label change) must be assessed per GCP / ICH E2 separately.
 
 ## Workflow
