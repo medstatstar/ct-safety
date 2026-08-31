@@ -57,6 +57,13 @@ This skill responds in the user's current input language and auto-detects / swit
 # Clinical Trial Safety Signal
 
 > Safe by default: **overview-first**. Step 1 (overview) runs automatically; Step 2 (detailed retrieval) runs ONLY after the user explicitly confirms.
+>
+> **What counts as explicit confirmation.** Any unambiguous go-ahead — e.g. "yes, run the detail" / "确认，跑详情",
+> or **`skip preview and run` / `跳过预览，直接跑`**. The last one is a *confirmation phrasing*, not a bypass:
+> it means "the overview is enough, run Step 2 now". All Step-2 guardrails apply identically (no heavy download
+> before confirmation, outputs confined to `--out-dir`, no confidential input). Conversely, a generic remark in
+> passing conversation is **not** consent — the go-ahead must be an instruction that explicitly asks for the
+> detail step to run.
 
 ## Disclaimer & Intended Use
 

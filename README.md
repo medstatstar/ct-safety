@@ -49,7 +49,7 @@ Just tell the assistant what you want in plain language. Below are real examples
 > I'll summarize the top reported reactions for candesartan from the FAERS public database, with counts, seriousness, and organ-class grouping — a safety baseline before any specific signal question.
 
 **How to trigger real computation:**
-> The overview runs automatically. Say "calculate directly" (or "直接计算") and the skill fetches the FAERS facets and prints the summary; no `--event` is required — it auto-degrades to a top-reactions report.
+> The overview runs automatically. Say "skip preview and run" (or "跳过预览，直接跑") and the skill fetches the FAERS facets and prints the summary; no `--event` is required — it auto-degrades to a top-reactions report.
 
 ### Example 2 · A specific drug–event signal
 
@@ -60,7 +60,7 @@ Just tell the assistant what you want in plain language. Below are real examples
 > I'll build a 2×2 drug–event table from FAERS and report PRR / ROR / IC / EBGM with 95% CIs and signal flags, plus a Benjamini-Hochberg FDR check across top events.
 
 **How to trigger real computation:**
-> The overview (total + Top-N) runs first and then stops for your confirmation. To run the detailed signal detection, reply "yes, run the detail" — or simply say "calculate directly" to skip the preview and execute.
+> The overview (total + Top-N) runs first and then stops for your confirmation. To run the detailed signal detection, reply "yes, run the detail" — or simply say "skip preview and run" to execute now.
 
 ### Example 3 · Corroborate with China official PV bulletins
 
@@ -71,7 +71,7 @@ Just tell the assistant what you want in plain language. Below are real examples
 > I'll search the public columns of the 国家不良反应监测中心 (cdr-adr.org.cn) for matching bulletins as **qualitative corroboration** of the FAERS signal. These are narrative bulletins only — not case counts — so they never feed the disproportionality math.
 
 **How to trigger real computation:**
-> The Chinese keyword search is part of the detailed run. Confirm the detail step (or "calculate directly"), passing the Chinese terms for higher recall: e.g. drug 奥希替尼 / event 肺炎.
+> The Chinese keyword search is part of the detailed run. Confirm the detail step (or "skip preview and run"), passing the Chinese terms for higher recall: e.g. drug 奥希替尼 / event 肺炎.
 
 ### Example 4 · Complex: multi-drug comparison (popup menu)
 
@@ -104,18 +104,18 @@ Just tell the assistant what you want in plain language. Below are real examples
 > Once you answer, I'll propose the exact analysis instead of dumping a full menu.
 
 **How to trigger real computation:**
-> After the branches resolve your intent, the same two-step workflow applies: overview auto-runs, detail waits for your confirmation (or "calculate directly" to execute now).
+> After the branches resolve your intent, the same two-step workflow applies: overview auto-runs, detail waits for your confirmation (or "skip preview and run" to execute now).
 
 ### Example 6 · Force the real run
 
 **You say:**
-> Calculate directly — run the candesartan angioedema signal detection now.
+> Skip preview and run — candesartan angioedema signal detection, now.
 
 **Assistant replies (sketch):**
-> Acknowledged. I'll skip the preview and execute the detailed FAERS retrieval and disproportionality analysis, then return the JSON / Markdown report.
+> Acknowledged. Running the detailed FAERS retrieval and disproportionality analysis now, then returning the JSON / Markdown report.
 
 **How to trigger real computation:**
-> "Calculate directly" / "直接计算" is the explicit override that performs the detail step immediately.
+> "Skip preview and run" / "跳过预览，直接跑" is one explicit way to confirm: it tells the skill the overview is enough and you want Step 2 now. It is a **confirmation, not a bypass** — the same Step-2 guardrails apply, and a passing remark is never treated as consent.
 
 ## What It Can Do — Scenarios
 
@@ -141,7 +141,7 @@ Yes. If you give only `--drug` (or just say the drug), it no longer errors — i
 Both are disproportionality measures on the drug–event 2×2 table. ROR (Reporting Odds Ratio) uses a odds-ratio form and flags a signal when its lower 95% CI > 1. PRR (Proportional Reporting Ratio) flags when PRR ≥ 2 **and** the χ² ≥ 4. IC (Information Component, UMC/VigiBase) signals when its lower CI > 0; EBGM (FDA MGPS Bayesian shrinkage) signals when EB05 ≥ 2. The skill reports all four and applies Benjamini-Hochberg FDR across multiple events.
 
 **How do I actually get the signal table, not just code?**
-By default the skill shows an overview (totals + Top-N) and stops. Confirm the detail step, or say "calculate directly" / "直接计算" — then it executes the FAERS retrieval and disproportionality analysis and returns JSON / Markdown (and optional PNG charts).
+By default the skill shows an overview (totals + Top-N) and stops. Confirm the detail step, or say "skip preview and run" / "跳过预览，直接跑" — then it executes the FAERS retrieval and disproportionality analysis and returns JSON / Markdown (and optional PNG charts).
 
 **Does it output in Chinese?**
 Yes. The skill follows your input language: prompts and reports switch to Chinese on a `zh-*` locale and English otherwise. Code comments and documentation remain English-only.
@@ -165,7 +165,7 @@ You stay in full control: the report is shown to you **before** anything is sent
 
 ## Safety (safe preview)
 
-**Two-step workflow, safe by default.** Step 1 (overview: totals + Top-N) runs automatically. Step 2 (detailed retrieval / signal detection) runs **only after you explicitly confirm** — or when you say "calculate directly". Nothing heavy executes until then, so a casual question never triggers a large download.
+**Two-step workflow, safe by default.** Step 1 (overview: totals + Top-N) runs automatically. Step 2 (detailed retrieval / signal detection) runs **only after you explicitly confirm** — or when you say "skip preview and run". Nothing heavy executes until then, so a casual question never triggers a large download.
 
 **Outbound data disclosure.** The skill only reads public sources:
 - **FDA FAERS** via openFDA `https://api.fda.gov/drug/event.json` (required, quantitative);

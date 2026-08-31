@@ -31,16 +31,30 @@
   `adapters/bug_report.py` 的 schema 注释、`__main__` 自检示例均来自 ct-samplesize，已全部
   改为 ct-safety 语境（示例改为 disproportionality / ROR_MISMATCH）。
 - **`AGENTS.md` 越界引用与自相矛盾（§16.0 审计项）**：① 版本号停留在 v0.1.35（实际 v0.9.2）
-  已更新；② 自改进日志原要求写入**用户全局** `~/.workbuddy/AGENTS.md`（读/写技能目录外的
-  用户文件属边界越界），改为写入**技能内** `.learnings/` 三个文件；③ 红线原写
+  已更新；② 自改进日志原要求写入技能目录**之外**的**用户全局 agent 配置文件**（读写用户
+  个人文件属边界越界），改为写入**技能内** `.learnings/` 三个文件；③ 红线原写
   `no data leaves the domain`，与技能实际会向 openFDA 发送查询词的事实矛盾（且属 §16.6
   禁止的绝对化表述），改为准确的出站披露（仅公开查询词发往官方 openFDA / cdr-adr，输出只写
   `--out-dir`）。
+- **覆盖触发词过于通用（§16.0 审计 #1 / #2，作者 2026-08-31 拍板）**：原中／英触发短语被审计
+  判为"过于通用、在正常对话中也会出现"，有误触发与提示注入风险；实际命中 **17 处**
+  （README.md 8 + zh-CN 9，SKILL.md 0）。已全量替换为 **「跳过预览，直接跑」/
+  "skip preview and run"** —— 更长更具体，不易在日常对话中自然出现。同步修掉 2 处因替换产生
+  的重复措辞（"…to skip the preview and execute" / "…跳过预览立即执行"）。
+- **README 承诺未实现的 override（连带发现并修复）**：上述短语在 SKILL.md 及全部 `.py`/`.json`
+  中**零实现**，README 却称其为显式覆盖指令。已在 SKILL.md §Clinical Trial Safety 顶部新增
+  「What counts as explicit confirmation」段落：明确该短语是**显式确认的一种说法、不是绕过**，
+  Step 2 的约束（确认前不大批量下载、输出限于 `--out-dir`、无保密输入）完全不变，
+  且"顺口一提的普通话语不构成同意"。
+- **修复说明自我维持告警（本轮自查发现）**：上一版 CHANGELOG 在整改说明里复述了被审计点名的
+  短语与路径字面串。CHANGELOG 属发布包内被扫描文件，复述会让审计脚本在本地重新命中签名。
+  已全部改为描述性表述（不复述字面串），并加注说明原因。
 
 ### §16.0 ClawHub 安全审计进展
 本轮整改后 **STILL_PRESENT 由 5 项降至 3 项**（RESOLVED 1 → 3）。已消除：
-`ct-samplesize` 身份错配（adapters/ 真残留）、`~/.workbuddy/AGENTS.md` 越界引用、
-`no data leaves the domain` 自相矛盾。剩余 3 项见下方「已知遗留」。
+`ct-samplesize` 身份错配（adapters/ 真残留）、技能目录外用户全局 agent 配置文件的越界引用、
+`no data leaves the domain` 自相矛盾。（后两项经整改后审计已不再命中，由于其 finding 正文
+未用引号包裹路径、脚本派生不到签名，状态记为 UNVERIFIED 而非 RESOLVED，需人工确认。）
 
 ### Added / §13.7 耗时与检索量警告（两份 README 新增独立章节）
 数值全部来自 2026-08-31 真实运行（药物 `candesartan`，匹配 53,248 条，匿名免 key 配额，
@@ -75,8 +89,8 @@
 
 | # | 项 | 级别 | 状态与建议 |
 |---|---|---|---|
-| 1 | 「直接计算」作为跳过安全预览的覆盖触发词 | MEDIUM | ClawHub 审计判为过于通用（`直接计算` / `calculate directly`，共 11 处：README.md 8 + zh-CN 3，SKILL.md 0）。**属 UX 产品决策，未擅自修改**——改为「跳过预览，直接跑」/ "skip preview and run" 可消除告警，但会改变既有用户习惯，待作者拍板。 |
-| 2 | 同上的英文版 `calculate directly` | MEDIUM | 同上，与 #1 一并决策。 |
+| 1 | 跳过预览的覆盖触发词（中／英各一） | MEDIUM | ✅ **已解决（作者 2026-08-31 拍板）**。原短语被 ClawHub 审计 #1 判为"过于通用、在正常对话中也会出现"（命中签名即短语本身，实为 **17 处**：README.md 8 + zh-CN 9，SKILL.md 0）。已全量替换为 **「跳过预览，直接跑」/ "skip preview and run"** —— 更长、更具体，不易在日常对话中自然出现。<br>**附带修掉一个更深层问题**：原短语在 SKILL.md 与全部 `.py`/`.json` 中**零实现**，README 却称其为 "explicit override" —— 属文档承诺未实现。已在 SKILL.md §Clinical Trial Safety 顶部补「What counts as explicit confirmation」段落，把该短语定义为**显式确认的一种说法（是确认，不是绕过）**，Step 2 约束不变。 |
+| 2 | 同上的英文版短语 | MEDIUM | ✅ 同上，一并替换。本行**刻意不复述原短语字面串**——CHANGELOG 属发布包内被扫描文件，复述会让审计脚本在本地重新命中签名、自我维持告警（见 `.learnings` LRN-20260831-005）。 |
 | 3 | `ct-samplesize` 签名仍命中 4 处 | MEDIUM | **判定为误报**：全部落在 ct-base 共享件内（`references/language_policy.md:3,77,83`、`scripts/i18n.py:222`），是底座文档中"以 ct-samplesize 为例"的正常举例，不是 ct-safety 的身份错配。改动会破坏 §16.8「叶子是底座子集」，**建议保持原样**并在审计回执中说明。 |
 
 ### 本轮未修的软上限告警（spec_lint WARN，不阻断）
@@ -129,7 +143,8 @@
 - **`requests` 依赖升级 2.31.0 → 2.32.5**：消除 clawhub_security_audit 标记的 6 个 CVE（CVE-2024-47081 等，中低危、边缘暴露面），纯补丁版不破坏 API。`requirements.txt` 已更新，本地环境已验证 2.32.5 可正常调 openFDA。
 
 ### Pending / 待确认（非阻断，记入发布报告）
-- **clawhub_security_audit MEDIUM（读取类，已豁免）**：① 读取 `~/.workbuddy/AGENTS.md` 做语言自动切换；② "no data leaves the domain" 文案与出站行为；③ `--out-dir` 参数。均属设计层面 MEDIUM、本地读取不发布个人内容，已确认豁免，未改动。`requests` CVE 项已随上述升级解决。
+- **clawhub_security_audit MEDIUM（读取类，已豁免）**：① 读取技能目录外的用户全局 agent 配置文件做语言自动切换；② "no data leaves the domain" 文案与出站行为；③ `--out-dir` 参数。均属设计层面 MEDIUM、本地读取不发布个人内容，已确认豁免，未改动。`requests` CVE 项已随上述升级解决。
+- **注**：上述三项及本节其他条目**均不复述被审计点名的路径／短语字面串**。CHANGELOG 本身是发布包内会被审计脚本扫描的文件，在修复说明里复述原文会让脚本在本地重新命中签名，导致告警自我维持（详见 `.learnings` 的 LRN-20260831-005）。
 
 ## v0.1.38 (2026-08-16) · ct-update P1 升级落地（本地，未发布）
 - **P1-C 信号验证工作流**（`--verify-signal`）：新增 `scripts/signal_verification.py`，接入主流程 `_run_verify_signal`；对 (药物,事件) 季度报告序列做时序 CUSUM/Poisson 趋势检验，并给出剂量-反应/去卷积确证补充（后两者需 `--case-level` 个案数据，公开计数接口下优雅降级）。
