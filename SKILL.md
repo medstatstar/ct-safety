@@ -42,12 +42,12 @@ permissions:
 
 This skill responds in the user's current input language and auto-detects / switches accordingly. The runtime scripts embed a locale check so all user-facing prompts switch to Chinese on a `zh-*` locale and to English otherwise. Code comments and documentation are English-only; the SKILL.md body, `references/*.md`, and `AGENTS.md` are English-only and agent-facing. For end-to-end walkthroughs and troubleshooting in your language, open the README above.
 
-## Cross-turn Continuity (跨轮连续性 · 必须)
+## Cross-turn Continuity (required)
 
 Family standard: `ct-base/references/continuity.md` (pattern A). Echo the block below after every analysis; on a follow-up (changed `event` / different comparator drug / different measure), read the most recent block in the conversation and override **only the changed fields** — never rely on LLM memory alone:
 
 ```
-## 当前检索设定：drug=… | event=… | comparator=… | measure=PRR | source=FAERS
+## Current retrieval settings: drug=… | event=… | comparator=… | measure=PRR | source=FAERS
 ```
 
 # Clinical Trial Safety Signal
@@ -108,11 +108,11 @@ Full formulas, thresholds, EBGM/MGPS math, FDR, aROR, trend, and the score/tier 
 | Temporal anomaly (`--trend`) | — | Quarterly CUSUM / rolling-Z / changepoint |
 | Multi-drug aROR (`--compare-drugs`) | — | Focal vs pooled-reference adjusted ROR |
 | Score 0–100 + T1–T4 (`--with-fda-label`) | FAERS×Label×CN-PV | Triangulated evidence tier |
-| Naranjo 因果归因（`--with-causality`） | FAERS 时间/去激发/再用药 + 可选 label | 定性因果归因旁证（non-causal，独立于统计信号） |
-| 信号验证工作流（`--verify-signal`） | FAERS 季度报告序列 | 时序 CUSUM/Poisson 趋势 + 剂量-反应/去卷积（确证补充；剂量-反应/去卷积需 `--case-level` 个案数据） |
-| MedDRA 编码辅助（`--code-verbatim`） | verbatim AE 术语 | verbatim→PT 模糊匹配（内置字典；LLM 模式 opt-in，不自动开启） |
-| 信号优先级排序与风险分级（`--prioritize`） | 检测到的信号 | 多维评分（严重度×新颖性×频率×趋势×多源）→ CRITICAL/HIGH/MEDIUM/LOW；叠加 `--with-fda-label` + `--trend` 时追加 label-gap / 异常趋势抬升层（K 项） |
-| PSUR/PBRER 自动报告（`--psur`） | 检测到的信号 | 生成 CIOMS/ICH E2C(R2) 格式 PSUR Markdown（psur.md） |
+| Naranjo causality attribution (`--with-causality`) | FAERS time / dechallenge / rechallenge + optional label | Qualitative causality side-evidence (non-causal, independent of statistical signals) |
+| Signal verification workflow (`--verify-signal`) | FAERS quarterly-report series | Time-series CUSUM / Poisson trend + dose-response / deconvolution (confirmatory supplement; dose-response / deconvolution need `--case-level` case data) |
+| MedDRA coding aid (`--code-verbatim`) | verbatim AE terms | verbatim→PT fuzzy matching (built-in dictionary; LLM mode opt-in, not auto-enabled) |
+| Signal prioritization & risk tiering (`--prioritize`) | Detected signals | Multi-dimensional score (severity × novelty × frequency × trend × multi-source) → CRITICAL/HIGH/MEDIUM/LOW; with `--with-fda-label` + `--trend`, adds a label-gap / anomaly-trend escalation layer (K items) |
+| PSUR/PBRER auto-report (`--psur`) | Detected signals | Generates CIOMS / ICH E2C(R2)-format PSUR Markdown (psur.md) |
 | Case-level de-duplication (on by default with `--case-level`) | FAERS individual case reports | L1 collapses follow-up `safetyreportversion` per `safetyreportid`; L2 flags suspected duplicates (demographic fingerprint + reaction-PT Jaccard, default 0.8) — flag-only unless `--drop-suspected-dupes`. Applies to the case listing ONLY; PRR/ROR/IC/EBGM come from aggregate endpoints and are NOT corrected. Disable via `--no-case-dedup` |
 | Non-ASCII drug-name auto-translate | — | `--drug 阿司匹林` → `aspirin`; disable `--no-resolve-drug-name` |
 
@@ -141,7 +141,7 @@ Two-step, overview-first (default since v0.1.18: **present summary in context, E
 
 ### One-shot signal report (`ct_safety.py`) — two core deliverables
 
-Running `ct_safety.py --drug X --event Y` (with `--run`) writes the following into `--out-dir`, and prints a "核心交付物 / Core Deliverables" block naming ① ② at the end:
+Running `ct_safety.py --drug X --event Y` (with `--run`) writes the following into `--out-dir`, and prints a "Core Deliverables" block naming ① ② at the end:
 
 - **`faers_report.html`** — the visual report (open in browser preview). **Core deliverable ①.**
 - **`faers_report.xlsx`** — the data workbook with ALL raw information: FAERS counts, the 2×2 table, the four disproportionality measures, and — when enabled — FDA Label / CN-PV / Score sheets. **Core deliverable ②; use it to audit every number.**

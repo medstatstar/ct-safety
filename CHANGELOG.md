@@ -1,5 +1,16 @@
 # Changelog — ct-safety
 
+## v0.9.2 (cont4, 2026-08-31) · SKILL.md 正文英文化（未发布）
+
+按 ct-base「SKILL.md 正文全英文」规范，将正文（frontmatter 之外）的叙述性中文全部译为英文：
+
+- **Features 表 5 行中文能力描述**：Naranjo 因果归因 / 信号验证工作流 / MedDRA 编码辅助 / 信号优先级排序与风险分级 / PSUR·PBRER 自动报告（`--with-causality` / `--verify-signal` / `--code-verbatim` / `--prioritize` / `--psur`）。
+- **其它叙述性中文**：`Cross-turn Continuity` 标题的中文括号、回显设定块示例（`当前检索设定` → `Current retrieval settings`）、One-shot 报告运行时输出串（`核心交付物` → `Core Deliverables`）。
+
+**保留 4 处有意的双语 / 示例中文**（非叙述残留）：Language 段导航标签 `中文指南`；显式确认触发短语的中英对照；非 ASCII 药名自动翻译的示例输入值 `--drug 阿司匹林`（译成 aspirin 即失去演示意义）。
+
+行数维持 197（替换同位置，未增行）；spec_lint F02 仍消除。本地提交，未 push / publish。
+
 ## v0.9.2 (2026-08-31) · ct-base §16 预发布合规修复 + §13.7 / §16.6 实测留痕（未发布）
 
 ### Fixed / 修复
