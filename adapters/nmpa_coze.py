@@ -10,23 +10,25 @@ WHY THIS EXISTS:
   工作流端点 ct-search.coze.site/run，由服务端浏览器通道抓取并返回结构化结果，
   本地零 Playwright、零浏览器依赖。
 
-PROTOCOL (mirrors ct-registry adapters/extsvc_client.py):
-  - POST JSON to https://ct-search.coze.site/run with `Authorization: Bearer <token>`.
-  - Payload: {"source": "nmpa_pv", "mode": "search", "drug": [...], "event": [...],
-              "terms": [...], "max_pages": N, "query_origin": <sha256(hostname)>}
-  - Async: gateway returns {"status":"accepted","run_id"} -> poll
-    GET <base>/run/status/{run_id} until completed; result records are
-    {"title","url","date","source_column","snippet"} shaped.
+PROTOCOL (consistent with the live ct-search.coze.site/run unified endpoint):
+  - POST JSON (sync) to https://ct-search.coze.site/run with `Authorization: Bearer <token>`.
+    The endpoint runs the LangGraph synchronously and returns the full state dict
+    (no async run_id / polling in practice; a minimal poll fallback is kept defensively).
+  - Payload: {"source": "nmpa_pv", "mode": "search", "keyword": <drug>,
+              "multi_keywords": "<event terms, space-separated>",
+              "max_pages": N, "query_origin": <sha256(hostname)>}
+  - Response: {"project_list": "<json {total_count, projects:[{title,url,date,
+              source_column,snippet,matched_keywords,tier}]}>", "total_count": N,
+              "run_id": "..."}  (project_list is a JSON STRING — parse it).
   - Token resolution (ct-base §5): --token > env CT_REGISTRY_COZE_TOKEN >
     embedded public blob (XOR+base64, same shared credential as ct-registry).
   - SAFE PREVIEW by default: no network I/O unless --run.
   - Outbound authorization gate (ct-base §5.212): endpoint must be present in
     adapters/config.json auto_approve_endpoints, else [AUTH-BLOCK] and exit.
 
-NOTE (server-side dependency): the server workflow must recognise source
-"nmpa_pv". If it replies "unknown source", the channel is wired correctly but
-the server-side source needs deploying (separate authorisation) — the client
-surfaces that verbatim instead of guessing.
+NOTE: source "nmpa_pv" is deployed on the unified endpoint (2026-08-31). If the
+endpoint ever returns "unknown source", the channel is wired correctly but the
+server-side source regressed — surface that verbatim instead of guessing.
 
 EGRESS: only PUBLIC query terms (drug / event keywords) are sent. No
 confidential data; PII patterns are stripped from the payload (ct-base §5.50).
@@ -117,14 +119,24 @@ def _query_origin():
 
 def search_nmpa(drug_keywords, event_keywords=None, terms=None, max_pages=3,
                 run=False, out=None, timeout=300, token=None, endpoint=None):
-    """检索 NMPA 通报（经 Coze 统一端点浏览器通道）。返回 result dict 或 None(preview)。"""
+    """检索 NMPA 通报（经 Coze 统一端点浏览器通道）。返回 result dict 或 None(preview)。
+
+    契约（与 ct-registry 统一端点一致）：服务端同步返回全局状态 dict，
+    project_list 为 JSON 字符串，内含 projects 列表（公报记录）。
+    """
     endpoint = endpoint or DEFAULT_ENDPOINT
+    drug_list = [d for d in (drug_keywords or []) if d]
+    event_list = [e for e in (event_keywords or []) if e]
+    terms_list = [t for t in (terms or []) if t]
+    primary_drug = drug_list[0] if drug_list else (event_list[0] if event_list else "")
+    # 事件词 + 额外词作为本地 AND 过滤条件（服务端 multi_keywords）
+    multi_kw = " ".join(event_list + terms_list)
+
     payload = {
         "source": SOURCE,
         "mode": "search",
-        "drug": [d for d in drug_keywords if d],
-        "event": [e for e in (event_keywords or []) if e],
-        "terms": [t for t in (terms or []) if t],
+        "keyword": primary_drug,
+        "multi_keywords": multi_kw,
         "max_pages": max(1, int(max_pages)),
         "query_origin": _query_origin(),
     }
@@ -144,10 +156,10 @@ def search_nmpa(drug_keywords, event_keywords=None, terms=None, max_pages=3,
 
     safe_payload = _sanitize(payload)
     try:
-        resp = requests.post(endpoint, headers=headers, json=safe_payload, timeout=30)
+        resp = requests.post(endpoint, headers=headers, json=safe_payload, timeout=timeout)
     except requests.exceptions.ProxyError:
         # ct-base §5.49：系统代理残留 → 绕代理直连重试
-        resp = requests.post(endpoint, headers=headers, json=safe_payload, timeout=30,
+        resp = requests.post(endpoint, headers=headers, json=safe_payload, timeout=timeout,
                              proxies={"http": None, "https": None})
     except requests.RequestException as e:
         return {"source": "NMPA via coze", "hit_count": 0, "hits": [],
@@ -162,8 +174,9 @@ def search_nmpa(drug_keywords, event_keywords=None, terms=None, max_pages=3,
         return {"source": "NMPA via coze", "hit_count": 0, "hits": [],
                 "error": "HTTP %s: %s" % (resp.status_code, resp.text[:300])}
 
+    # 极小概率异步分支（本端点实际同步返回，防御性保留）
     run_id = data.get("run_id")
-    if data.get("status") == "accepted" and run_id:
+    if data.get("status") == "accepted" and run_id and not data.get("project_list"):
         base = endpoint.rsplit("/run", 1)[0]
         status_url = "%s/run/status/%s" % (base.rstrip("/"), run_id)
         deadline = time.time() + timeout
@@ -192,22 +205,48 @@ def search_nmpa(drug_keywords, event_keywords=None, terms=None, max_pages=3,
                     "error": "timeout after %ss polling run_id=%s" % (timeout, run_id),
                     "run_id": run_id}
 
-    records = data.get("records") or []
+    # 解析 project_list（JSON 字符串）
+    projects = []
+    if data.get("project_list"):
+        try:
+            pl = json.loads(data["project_list"])
+            projects = pl.get("projects", []) if isinstance(pl, dict) else []
+        except Exception as e:
+            return {"source": "NMPA via coze", "hit_count": 0, "hits": [],
+                    "error": "project_list parse failed: %s" % e}
+
+    hits = []
+    tier_counts = {}
+    for p in projects:
+        tier = p.get("tier") or "NMPA通报"
+        hit = {
+            "title": p.get("title", ""),
+            "url": p.get("url", ""),
+            "date": p.get("date"),
+            "source_column": p.get("source_column", "NMPA通报"),
+            "snippet": p.get("snippet", ""),
+            "matched_keywords": p.get("matched_keywords", []),
+            "tier": tier,
+        }
+        hits.append(hit)
+        tier_counts[tier] = tier_counts.get(tier, 0) + 1
+
     result = {
         "source": "NMPA via coze (nmpa.gov.cn browser channel)",
         "note": ("NMPA《药品不良反应信息通报》定性叙事检索；非个案计数，不可做 "
                  "disproportionality 分析。仅作 FAERS 信号定性佐证。"),
         "query": payload,
-        "run_id": data.get("run_id") or run_id,
-        "hit_count": len(records),
-        "hits": records,
+        "run_id": data.get("run_id"),
+        "hit_count": len(hits),
+        "tier_counts": tier_counts,
+        "hits": hits,
     }
     if isinstance(data, dict) and data.get("error"):
         result["error"] = data["error"]
     if out:
         with open(out, "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
-        print("[OK] wrote", out, "(hits=%d)" % len(records))
+        print("[OK] wrote", out, "(hits=%d)" % len(hits))
     return result
 
 

@@ -180,11 +180,20 @@ def run(drug, event, field, top, api_key, out_dir, with_cn_pv=False,
                     cn_pv = {"source": "NMPA via coze", "hit_count": 0, "hits": []}
                 cn_pv = dict(cn_pv)
                 cn_pv["hit_count"] = cn_pv.get("hit_count", 0) + nmpa_res["hit_count"]
+                # 保留服务端 nmpa_pv 节点定级的 tier（通报专文 / 提及），
+                # 仅补 column 别名；tier 不强制覆盖。
                 cn_pv["hits"] = list(cn_pv.get("hits", [])) + [
                     dict(h, column=h.get("source_column", "NMPA通报"),
-                         tier="NMPA通报") for h in nmpa_res["hits"]]
+                         tier=h.get("tier", "NMPA通报")) for h in nmpa_res["hits"]]
                 cn_pv.setdefault("tier_counts", {})
-                cn_pv["tier_counts"]["NMPA通报"] = nmpa_res["hit_count"]
+                # 按服务端真实 tier 汇总；无 tier_counts 时回退单一键
+                nmpa_tc = nmpa_res.get("tier_counts") or {}
+                if nmpa_tc:
+                    for _t, _c in nmpa_tc.items():
+                        cn_pv["tier_counts"][_t] = cn_pv["tier_counts"].get(_t, 0) + _c
+                else:
+                    cn_pv["tier_counts"]["NMPA通报"] = cn_pv["tier_counts"].get(
+                        "NMPA通报", 0) + nmpa_res["hit_count"]
 
     if res is not None:
         md = report_mod.render(res, cn_pv=cn_pv)

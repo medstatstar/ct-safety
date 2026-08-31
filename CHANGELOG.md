@@ -1,5 +1,13 @@
 # Changelog — ct-safety
 
+## v0.9.5 (2026-08-31) · nmpa_coze.py 契约对齐统一端点（本地提交，未发布）
+- `adapters/nmpa_coze.py` 客户端契约对齐 ct-registry 统一端点真实返回：
+  - 发出 payload 改为 `{source:nmpa_pv, mode:search, keyword:<药名>, multi_keywords:<事件词空格分隔>, max_pages, query_origin}`（去掉旧 `drug/event/records` 形态）。
+  - 解析 `result["project_list"]`（JSON 字符串）→ `projects` 列表 → 映射为 hits（`title/url/date/source_column/snippet/matched_keywords/tier`）。
+  - 保留服务端 nmpa_pv 节点定级的 `tier`（通报专文/提及），删除错误的异步轮询主路径（端点实际同步返回），仅保留防御性轮询分支。
+- `scripts/ct_safety.py` 合并段：NMPA 命中按服务端真实 `tier` 汇总 `tier_counts`、保留 `tier` 不再强制覆盖为「NMPA通报」。
+- 配合 ct-registry 统一端点镜像新增 `nmpa_pv` 源（部署需作者在 Coze 控制台上传工作流包；本地已备 `nmpa_pv_deploy_bundle.zip` + MD5）。
+
 ## v0.9.4 (2026-08-31) · CN-PV v2：召回/证据强度/浏览器通道（本地提交，未发布）
 
 ### Added / 新增

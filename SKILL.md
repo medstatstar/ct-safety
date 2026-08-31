@@ -3,7 +3,7 @@ slug: ct-safety
 displayName: Clinical Trial Safety Signal / 临床试验安全信号专家
 name: ct-safety
 cn_name: 临床试验安全信号专家
-version: 0.9.4
+version: 0.9.5
 invocable: true
 required_commands: [python]
 summary: "基于 FDA FAERS 公开不良事件数据做 disproportionality 信号检测（PRR / ROR / IC / EBGM），辅助药物安全性监测；可选接入中国官方药物警戒通报（cdr-adr.org.cn）作定性佐证。检索公开不良事件数据（A 档：普通输入 + 对外检索，network=public-retrieval）。"
