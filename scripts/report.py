@@ -64,7 +64,7 @@ def render(res, cn_pv=None):
                  "（药物警戒快讯 / 数据报告 / 通知通告 / 器械·化妆品警戒快讯）。")
     lines.append("> 此为**定性叙事通报**，**非个案计数，不可做 disproportionality (PRR/ROR/IC) 分析**；"
                  "仅作上方 FAERS 量化信号的**定性佐证**。NMPA《药品不良反应信息通报》主站被 WAF 拦截，"
-                 "未纳入；快讯已汇总国内外风险点名。")
+                 "本地不直连——如需覆盖可经 Coze 浏览器通道（`--with-nmpa-coze`）。")
     if cn_pv and cn_pv.get("hit_count"):
         hits = cn_pv["hits"]
         mc = cn_pv.get("max_per_column")
@@ -72,14 +72,20 @@ def render(res, cn_pv=None):
         lines.append("")
         lines.append("命中 **%d** 条（在抓取的最新 %s 篇/栏目内）：\n"
                      % (cn_pv["hit_count"], mc_disp))
-        lines.append("| 日期 Date | 栏目 Column | 标题 Title | 命中词 Kw | 链接 Link |")
-        lines.append("|---|---|---|---|---|")
+        tier_counts = cn_pv.get("tier_counts")
+        if tier_counts:
+            tier_disp = "、".join("%s %d" % (k, v) for k, v in tier_counts.items() if v)
+            if tier_disp:
+                lines.append("按佐证等级 / By evidence tier: %s\n" % tier_disp)
+        lines.append("| 佐证等级 Tier | 日期 Date | 栏目 Column | 标题 Title | 命中词 Kw | 链接 Link |")
+        lines.append("|---|---|---|---|---|---|")
         for h in hits:
             title = h["title"].replace("|", "/")
             link = "[原文](%s)" % h["url"]
-            lines.append("| %s | %s | %s | %s | %s |" % (
-                h.get("date") or "-", h.get("column", "-"),
-                title, ", ".join(h.get("matched_keywords", [])), link))
+            lines.append("| %s | %s | %s | %s | %s | %s |" % (
+                h.get("tier") or "-", h.get("date") or "-",
+                h.get("column", "-"), title,
+                ", ".join(h.get("matched_keywords", [])), link))
         lines.append("")
         lines.append("**摘要片段 / Snippets:**")
         for h in hits:
@@ -88,8 +94,8 @@ def render(res, cn_pv=None):
                 h.get("snippet", "")[:160]))
     else:
         lines.append("")
-        lines.append("未命中中国官方通报（在抓取的最新抽样内）。注意：此为**最新页抽样检索**而非全量库检索；"
-                     "如需更广覆盖，可增大 `--cn-max`，或显式传入中文事件词 `--event-cn`。")
+        lines.append("未命中中国官方通报（在当前 `--cn-max-pages` 页 / `--cn-since` 日期窗内）。注意：此为**逐页遍历检索**而非全量库检索；"
+                     "如需更广覆盖，可增大 `--cn-max-pages`、放宽 `--cn-since`，或显式传入中文事件词 `--event`。")
     return "\n".join(lines)
 
 

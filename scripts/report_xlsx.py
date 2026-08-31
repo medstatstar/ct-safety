@@ -200,18 +200,20 @@ def build_signal_xlsx(out_path, *, drug, event, fetch_data, disp_res=None,
     # ---------------- CN_PV ----------------
     if cn_pv and cn_pv.get("hit_count"):
         ws = wb.add_worksheet("CN_PV")
-        widths = [14, 18, 60, 18, 40]
+        widths = [14, 12, 18, 60, 18, 40]
         for i, w in enumerate(widths):
             ws.set_column(i, i, w)
         ws.write(0, 0, "中国官方药物警戒通报 / CN PV Bulletins", f_title)
-        ws.write_row(1, 0, ["日期 Date", "栏目 Column", "标题 Title", "命中词 Kw", "链接 Link"], f_hdr)
+        ws.write_row(1, 0, ["佐证等级 Tier", "日期 Date", "栏目 Column",
+                            "标题 Title", "命中词 Kw", "链接 Link"], f_hdr)
         rr = 2
         for h in cn_pv["hits"]:
-            ws.write(rr, 0, h.get("date") or "-", f_cell)
-            ws.write(rr, 1, h.get("column", "-"), f_cell)
-            ws.write(rr, 2, h.get("title", "").replace("|", "/"), f_cell)
-            ws.write(rr, 3, ", ".join(h.get("matched_keywords", [])), f_cell)
-            ws.write(rr, 4, h.get("url", ""), f_cell)
+            ws.write(rr, 0, h.get("tier") or "-", f_cell)
+            ws.write(rr, 1, h.get("date") or "-", f_cell)
+            ws.write(rr, 2, h.get("column", "-"), f_cell)
+            ws.write(rr, 3, h.get("title", "").replace("|", "/"), f_cell)
+            ws.write(rr, 4, ", ".join(h.get("matched_keywords", [])), f_cell)
+            ws.write(rr, 5, h.get("url", ""), f_cell)
             rr += 1
 
     # ---------------- Score ----------------

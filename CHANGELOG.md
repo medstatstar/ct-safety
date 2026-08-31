@@ -1,5 +1,37 @@
 # Changelog — ct-safety
 
+## v0.9.4 (2026-08-31) · CN-PV v2：召回/证据强度/浏览器通道（本地提交，未发布）
+
+### Added / 新增
+- **`fetch_cn_pv.py` v2 全面升级**（cdr-adr.org.cn 公开栏目定性检索）：
+  - **分页遍历**：`--cn-max-pages`（每栏目列表页数，默认 1=v1 兼容；3–5 覆盖历史通报）。
+  - **日期窗**：`--cn-since` / `--cn-until`（YYYY 或 YYYY-MM-DD）；日期取 `<meta PubDate>`，
+    取不到时正文正则兜底（`20xx[-/年]xx[-/月]xx`）；无日期文章保留并降级展示，不在日期维度漏检。
+  - **药名词表扩展**：自动读 `references/drug_name_map.json`（486 条）做中英双向扩展，
+    调用方只需传一个中文名/英文名；新增 16 个肿瘤/抗感染常用药名。
+  - **事件同义词组**：`肺炎→间质性肺炎/间质性肺病/ILD` 等 13 组，组内任一原词命中即整组生效。
+  - **佐证等级 per hit**：通报专文（标题点名药物）> 数据报告（栏目命中）> 提及；报告按等级+日期排序。
+  - **本地缓存**：`cn_pv_cache.json` 按查询指纹缓存，重复跑不重抓。
+  - **健壮性**：列表链接正则放宽（相对/绝对、带/不带引号）；礼貌抓取（0.6s 间隔 + 5xx 一次退避）。
+- **NMPA 浏览器通道客户端** `adapters/nmpa_coze.py`：NMPA《药品不良反应信息通报》主站被 WAF(412)
+  拦截，改走 ct-registry 统一端点 `ct-search.coze.site/run`（Coze 服务器端浏览器抓取，本地零浏览器依赖）。
+  复用 ct-base §5 公用凭据（XOR+base64 混淆 blob，与 ct-registry 同密钥同 token）；PII 剥离、
+  SAFE PREVIEW（默认不联网）、出站授权闸门（须 `config.json auto_approve_endpoints` 放行）。
+  由 `--with-nmpa-coze` / `--nmpa-out` 触发，命中并入 CN-PV 报告（tier 标「NMPA通报」）。
+- **报告渲染**：`report.py` / `report_xlsx.py` 的 CN-PV 表格新增「佐证等级 Tier」列 + tier 汇总行；
+  空状态文案改为反映分页+日期窗能力。
+
+### Known Limitation / 已知限制
+- **`nmpa_pv` Coze 源尚未在服务器端部署**：客户端已正确接线（token 有效、端点可达、协议正确，
+  已用 `who` 源对照验证 HTTP 200 正常返回），但统一端点目前只支持 `who/chinadrugtrials/isrctr/drks/chictr`，
+  不含 `nmpa_pv`。`--with-nmpa-coze` 当前会因服务器无该源而超时/报错（已优雅降级为 error dict，不崩溃）。
+  需作者在统一端点部署 `nmpa_pv` 浏览器工作流后方可生效。
+
+## v0.9.3 (2026-08-31) · 发布 SkillHub（skillId=148829）
+
+SKILL.md 正文全英文、双语 README、发布合规擦除（scrub）后发布至 SkillHub；因 0.9.2 在该平台已存在，
+源 SKILL.md 升 0.9.3 并本地提交（未 push GitHub）。GitHub / ClawHub 未发布，待授权。
+
 ## v0.9.2 (cont4, 2026-08-31) · SKILL.md 正文英文化（未发布）
 
 按 ct-base「SKILL.md 正文全英文」规范，将正文（frontmatter 之外）的叙述性中文全部译为英文：

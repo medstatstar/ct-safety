@@ -85,6 +85,8 @@ def _render_top_events(data, drug, cn_pv=None):
 
 def run(drug, event, field, top, api_key, out_dir, with_cn_pv=False,
         drug_cn=None, event_cn=None, cn_terms=None, cn_max=10,
+        cn_max_pages=1, cn_since=None, cn_until=None, cn_use_cache=True,
+        with_nmpa_coze=False, nmpa_out=None,
         date_from=None, date_to=None, benchmark_drugs=None, top_events_signal=None,
         continuity=True, trend=False, compare_drugs=None, with_fda_label=False,
         case_level=0, resolve_drug_name=True, with_causality=False,
@@ -150,7 +152,39 @@ def run(drug, event, field, top, api_key, out_dir, with_cn_pv=False,
             print("[TIP] CN-PV uses --drug=%r on cdr-adr.org.cn; pass --drug-cn (Chinese "
                   "name) for higher recall." % drug)
         cn_pv = fetch_cn_pv.search(cn_drug, None, cn_event, cn_terms, cn_max,
-                                  run=True, out=cn_pv_json)
+                                  run=True, out=cn_pv_json,
+                                  max_pages=cn_max_pages, since=cn_since,
+                                  until=cn_until, use_cache=cn_use_cache)
+
+    # Optional: NMPA bulletins via Coze browser channel (WAF-blocked locally)
+    nmpa_res = None
+    if with_nmpa_coze:
+        try:
+            sys.path.insert(0, os.path.join(os.path.dirname(
+                os.path.abspath(__file__)), os.pardir, "adapters"))
+            import nmpa_coze
+        except ImportError:
+            nmpa_coze = None
+            print("[WARN] adapters/nmpa_coze.py not found; skip NMPA channel")
+        if nmpa_coze is not None:
+            nm_drug = drug_cn or drug
+            nm_event = event_cn or event
+            from fetch_cn_pv import expand_drug_keywords, expand_event_keywords
+            nm_out = nmpa_out or os.path.join(out_dir, "nmpa_coze.json")
+            nmpa_res = nmpa_coze.search_nmpa(
+                expand_drug_keywords(nm_drug),
+                expand_event_keywords(nm_event), cn_terms, cn_max_pages,
+                run=True, out=nm_out)
+            if nmpa_res and nmpa_res.get("hit_count"):
+                if cn_pv is None:
+                    cn_pv = {"source": "NMPA via coze", "hit_count": 0, "hits": []}
+                cn_pv = dict(cn_pv)
+                cn_pv["hit_count"] = cn_pv.get("hit_count", 0) + nmpa_res["hit_count"]
+                cn_pv["hits"] = list(cn_pv.get("hits", [])) + [
+                    dict(h, column=h.get("source_column", "NMPA通报"),
+                         tier="NMPA通报") for h in nmpa_res["hits"]]
+                cn_pv.setdefault("tier_counts", {})
+                cn_pv["tier_counts"]["NMPA通报"] = nmpa_res["hit_count"]
 
     if res is not None:
         md = report_mod.render(res, cn_pv=cn_pv)
@@ -1121,6 +1155,22 @@ def main():
     ap.add_argument("--cn-terms", nargs="*", help="extra AND keywords for CN-PV")
     ap.add_argument("--cn-max", type=int, default=10,
                     help="max latest articles scraped per CN-PV column")
+    # CN-PV v2: pagination / date window / cache control
+    ap.add_argument("--cn-max-pages", type=int, default=1,
+                    help="CN-PV listing pages to traverse per column (default 1 = "
+                         "latest page only; 3-5 covers history)")
+    ap.add_argument("--cn-since", help="CN-PV date window start (YYYY or YYYY-MM-DD)")
+    ap.add_argument("--cn-until", help="CN-PV date window end (YYYY or YYYY-MM-DD)")
+    ap.add_argument("--cn-no-cache", action="store_true",
+                    help="disable CN-PV result cache (cn_pv_cache.json)")
+    # NMPA 通报 via Coze 浏览器通道（NMPA 主站 WAF 拦截，本地不直连）
+    ap.add_argument("--with-nmpa-coze", action="store_true",
+                    help="additionally search NMPA adverse-reaction bulletins via the "
+                         "Coze browser channel (adapters/nmpa_coze.py); requires the "
+                         "endpoint in adapters/config.json auto_approve_endpoints")
+    ap.add_argument("--nmpa-out", default=None,
+                    help="output JSON for the NMPA coze result "
+                         "(default: <out-dir>/nmpa_coze.json)")
     # R5: cross-competitor safety benchmark (same event, horizontal comparison)
     ap.add_argument("--benchmark-drug", nargs="*", default=None,
                     help="competitor drugs to benchmark against the same --event "
@@ -1199,6 +1249,9 @@ def main():
     run(args.drug, args.event, args.field, args.top, args.api_key, args.out_dir,
         args.with_cn_pv, args.drug_cn, args.event_cn, args.cn_terms, args.cn_max,
         args.date_from, args.date_to, args.benchmark_drug, args.top_events_signal,
+        cn_max_pages=args.cn_max_pages, cn_since=args.cn_since,
+        cn_until=args.cn_until, cn_use_cache=not args.cn_no_cache,
+        with_nmpa_coze=args.with_nmpa_coze, nmpa_out=args.nmpa_out,
         continuity=not args.no_continuity, trend=args.trend,
         compare_drugs=args.compare_drugs, with_fda_label=args.with_fda_label,
         case_level=args.case_level,
