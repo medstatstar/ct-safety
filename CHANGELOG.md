@@ -30,6 +30,17 @@
 - **`adapters/` 内 `ct-samplesize` 残留**：`adapters/__init__.py` docstring 与
   `adapters/bug_report.py` 的 schema 注释、`__main__` 自检示例均来自 ct-samplesize，已全部
   改为 ct-safety 语境（示例改为 disproportionality / ROR_MISMATCH）。
+- **`AGENTS.md` 越界引用与自相矛盾（§16.0 审计项）**：① 版本号停留在 v0.1.35（实际 v0.9.2）
+  已更新；② 自改进日志原要求写入**用户全局** `~/.workbuddy/AGENTS.md`（读/写技能目录外的
+  用户文件属边界越界），改为写入**技能内** `.learnings/` 三个文件；③ 红线原写
+  `no data leaves the domain`，与技能实际会向 openFDA 发送查询词的事实矛盾（且属 §16.6
+  禁止的绝对化表述），改为准确的出站披露（仅公开查询词发往官方 openFDA / cdr-adr，输出只写
+  `--out-dir`）。
+
+### §16.0 ClawHub 安全审计进展
+本轮整改后 **STILL_PRESENT 由 5 项降至 3 项**（RESOLVED 1 → 3）。已消除：
+`ct-samplesize` 身份错配（adapters/ 真残留）、`~/.workbuddy/AGENTS.md` 越界引用、
+`no data leaves the domain` 自相矛盾。剩余 3 项见下方「已知遗留」。
 
 ### Added / §13.7 耗时与检索量警告（两份 README 新增独立章节）
 数值全部来自 2026-08-31 真实运行（药物 `candesartan`，匹配 53,248 条，匿名免 key 配额，
@@ -59,6 +70,22 @@
 > 附注：`--compare-drugs` 的语义为**第一个药 = 焦点药、其余 = 参照池**，`--drug` 不参与对比
 > 计算（与 CLI help 一致）。实测时若只写 `--compare-drugs gefitinib erlotinib`，焦点药会是
 > gefitinib 而非 `--drug` 指定的药。
+
+### 已知遗留（发布前须人工决策，均已评估）
+
+| # | 项 | 级别 | 状态与建议 |
+|---|---|---|---|
+| 1 | 「直接计算」作为跳过安全预览的覆盖触发词 | MEDIUM | ClawHub 审计判为过于通用（`直接计算` / `calculate directly`，共 11 处：README.md 8 + zh-CN 3，SKILL.md 0）。**属 UX 产品决策，未擅自修改**——改为「跳过预览，直接跑」/ "skip preview and run" 可消除告警，但会改变既有用户习惯，待作者拍板。 |
+| 2 | 同上的英文版 `calculate directly` | MEDIUM | 同上，与 #1 一并决策。 |
+| 3 | `ct-samplesize` 签名仍命中 4 处 | MEDIUM | **判定为误报**：全部落在 ct-base 共享件内（`references/language_policy.md:3,77,83`、`scripts/i18n.py:222`），是底座文档中"以 ct-samplesize 为例"的正常举例，不是 ct-safety 的身份错配。改动会破坏 §16.8「叶子是底座子集」，**建议保持原样**并在审计回执中说明。 |
+
+### 本轮未修的软上限告警（spec_lint WARN，不阻断）
+- `SKILL.md` 215 行 > 200（§16.1 软上限）；
+- 发布集非 md 文件 45 个 > 40（§16.1 软上限）；
+- `scripts/` 内 3 处出站调用（§16.9）：`fetch_faers.py` / `fetch_fda_label.py` / `kw_localize.py`。
+  §16.9 对**既有**技能只要求"**新增**出站功能归位 adapters/"，且 spec_lint 仅判 WARN 而非
+  ERROR；迁移需改 5 个 py 的 import 路径 + 6 个文档引用，回归风险大于收益，故本轮未动，
+  待后续架构改造时统一处理。
 
 ## v0.9.1 (2026-08-29) · FAERS 个案级去重（P1-A，本地，未发布）
 
