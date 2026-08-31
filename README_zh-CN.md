@@ -6,7 +6,7 @@
   <img src="assets/icon.svg" width="240" height="240" alt="ct-safety 图标"/>
 </div>
 
-> 一个默认安全的药物警戒技能：对 **FDA FAERS** 公开不良事件数据筛查药物-事件安全信号（PRR / ROR / IC / EBGM，含 95% 置信区间），并可选叠加中国官方药物警戒通报作佐证。仅读取公开数据——**零保密输入（B 档）**。
+> 一个默认安全的药物警戒技能：对 **FDA FAERS** 公开不良事件数据筛查药物-事件安全信号（PRR / ROR / IC / EBGM，含 95% 置信区间），并可选叠加中国官方药物警戒通报作佐证。仅读取公开数据——**零保密输入（A 档，`network=public-retrieval`）**。
 
 ## 适用人群
 
@@ -15,6 +15,26 @@
 - **各制药企业的临床试验从业者** —— 申办方、CRO，以及医学 / 统计 / 注册等角色；
 - **在医疗机构中设计、管理临床试验项目，或参与临床试验研究实务的医护人员**；
 - **希望系统学习临床试验知识的医学专业学生**。
+
+## 耗时与检索量提示
+
+> ⚠️ **耗时与下载量上限**。本技能需联网检索 openFDA，耗时随你拉取的个案报告条数增长。以下为 **2026-08-31 实测**（药物 `candesartan`，匹配报告 53,248 条，匿名免 key 配额，上海 / 约 200 Mbps）：
+>
+> | 负载 | 命令形态 | 实测 wall-clock | 产出 |
+> |---|---|---|---|
+> | **概览**（count-facet 快取，默认路径） | `ct_safety.py --drug candesartan --run`（不给 `--event`） | **6 秒** | 匹配 53,248 条，top-10 反应 |
+> | **信号检测 + 100 条个案** | `ct_safety.py --drug candesartan --event NAUSEA --case-level 100 --run` | **57 秒** | 100 条个案 |
+> | **批量下载** | `fetch_reports.py --drug candesartan --max 500 --run` | **311 秒**（5 页，约 62 秒 / 每 100 条页） | 500 条原始报告 |
+> | **满上限外推值** | `--max 10000` = 100 页 | **约 103 分钟**（按上表 62 秒/页外推，**非直接实测**） | 10,000 条原始报告 |
+>
+> **单次运行上限（与实现参数一致）**：
+> - `fetch_reports.py --max <n>` → 硬上限 **10,000**（`HARD_CAP`）；超出自动 clamp 并打印 `[WARN]`。
+> - `ct_safety.py --case-level <n>` → **单页**抓取，硬上限 **100**；超出自动截断并打印 `[WARN]`。且**必须配合 `--event`** 使用（否则被忽略）。批量下载请改用 `fetch_reports.py --max`。
+> - openFDA 配额：匿名 240 次/分、1,000 次/天按 IP；免费 key 240 次/分、120,000 次/天按 key。单次请求超时 120 秒。
+>
+> **触顶 / 超时行为**：超出上限**不报错**——自动截断到上限、打印 `[WARN] ... clamped/truncated` 并返回部分结果。配额耗尽返回 HTTP **429**，需加 `--api-key` 或降低请求频率。单页超时重试 3 次后报错。
+>
+> **如何避免长时间等待**：先用秒级概览摸清基数再决定是否下载个案；用 `--date-from` / `--date-to` 缩小时间窗；`--max` 由小到大逐步加（500 → 2000 → …）；申请免费 openFDA key 提升日配额。
 
 ## 如何在对话里使用
 
@@ -134,6 +154,15 @@
 
 切勿在聊天里发送 key，也别把它写进任何会随技能发布的文件——key 仅本地存储，且仅经 HTTPS 发往官方 openFDA API。
 
+**Q: 发现结果有误怎么办？怎么上报？**
+A: 本技能遵循 ct-base §20.3 错误报告流程。若您怀疑结果有误（或引擎报错），直接说 **"上报问题" / "report a bug" / "提交错误报告"**。技能在检测到疑似缺陷时（如引擎报错、重试仍失败）也会**主动询问**是否上报——**每会话最多 1 次**，您可随时拒绝。无论哪种方式，助手都会：
+1. **生成一份脱敏报告**（11 键白名单：skill / skill_version / test / error_type / error_code / engine_status / description / locale / query_origin / session_hash / attempts——**不含您的原始输入值或个人数据**，仅 `description` 字段由您把关披露，如所用算法/函数、错误消息原文）；
+2. **展示报告全文供您检视**——可补充问题描述或更正任何内容后再确认；
+3. **经您明确确认后发送**——本会话有 coze 调用则发往统一端点 `https://ct-bugreport.coze.site/run`；纯本地则保存脱敏报告 + 提示邮件联系作者（数据不出域）；
+4. **收到回执**——包括您此前从同一来源提交的报告是否已被修复（含修复说明）或仍在处理中。
+
+整个过程您完全可控：报告在**发送前**先展示给您，未经您明确说「发送」绝不传输任何内容。
+
 ## 安全（安全预览）
 
 **两段式流程，默认安全。** 第一步（概览：总数 + Top-N）自动执行。第二步（详细检索 / 信号检测）**仅在你显式确认后**才执行——或当你说「直接计算」时。在确认前不会触发任何大批量下载，随口一问也不会跑重计算。
@@ -143,7 +172,7 @@
 - **FDA Label** 经 openFDA `drug/label.json`（使用 `--with-fda-label` 时的可选第三源）；
 - **国家药品不良反应监测中心** `cdr-adr.org.cn` 公开栏目（使用 `--with-cn-pv` 时的可选源，仅定性佐证——叙事通报、无个案计数，绝不进入 disproportionality）。
 
-**零保密数据或信息输入**（B 档：普通数据输入 + 对外检索）。NMPA 主站被 WAF 拦截（HTTP 412），已刻意排除。你的 openFDA key（若使用）**仅本地存储**，且**仅经 HTTPS 发往官方 openFDA API**。
+**零保密数据或信息输入**（A 档：普通数据输入 + 对外检索，`network=public-retrieval`）。NMPA 主站被 WAF 拦截（HTTP 412），已刻意排除。你的 openFDA key（若使用）**仅本地存储**，且**仅经 HTTPS 发往官方 openFDA API**。
 
 信号检测仅供筛查，非因果结论；监管提交（DSUR / PBRER / 标签变更）须另行按 GCP / ICH E2 评估。
 
@@ -155,7 +184,7 @@
 
 | 源 | 访问方式 | 状态 |
 |---|---|---|
-| FDA FAERS（openFDA `drug/event.json`） | 官方公开 REST API，直连，低频无需 key | 必需（B 档，量化） |
+| FDA FAERS（openFDA `drug/event.json`） | 官方公开 REST API，直连，低频无需 key | 必需（A 档，量化） |
 | FDA Label（openFDA `drug/label.json`） | 同 openFDA，无需 key；`adverse_reactions` / `warnings` | 可选 `--with-fda-label`（标签内/外风险） |
 | 国家不良反应监测中心（cdr-adr.org.cn） | 公开栏目抓取（药物警戒快讯 / 数据报告 / 通知通告 / 器械·化妆品警戒快讯）；无 WAF、无需 key | 可选 `--with-cn-pv`（仅定性佐证） |
 
@@ -248,11 +277,9 @@ CT_SAFETY_LIVE=1 python tests/run_tests.py
 
 ## 保密声明
 
-> CT 全系列技能由 20+ 个技能构成，按「保密信息出域风险 + 是否对外检索」分为 A、B 两档，完整覆盖新药临床试验（Clinical Trial）全流程的各方面需求。
+> CT 全系列技能由 20+ 个技能构成，按「输入是否涉密」分为 **A、B 两档**（network / egress / publish 为独立正交属性，详见 ct-base §11），完整覆盖新药临床试验（Clinical Trial）全流程的各方面需求。
 >
-> - **A 档（非涉密·公开）**：输入为普通数据，可完全本地运行（`network=off`）或对外公开检索（`network=public-retrieval`，如 ct-registry / ct-advisor 等）；不涉及任何保密信息。A 档技能均在 GitHub 公开发布。
-> - **B 档（涉密·内部）**：涉及药企需严格保密的临床试验数据、内部资讯等敏感内容（如 ct-analysis、ct-sdtm、ct-eligibility 等）；B 档在本地处理（`egress=none`，数据不出域）或需审批出站（`egress=approval-req`，如 ct-eligibility）。B 档技能仅限企业内部使用，目前不对外公开发布。
->
-> 若您对这些涉密技能确有实际需求，欢迎与作者联系，定制并安装相关技能。
+> - **A 档（输入非涉密）**：输入为普通数据，可完全本地运行（`network=off`）或对外公开检索（`network=public-retrieval`，如 ct-registry / ct-advisor 等）；不涉及任何保密信息。A 档技能均在 GitHub 公开发布。
+> - **B 档（输入涉密）**：输入含药企需严格保密的临床试验数据 / 方案 / CRF（如 ct-analysis、ct-sdtm、ct-protocol、ct-eligibility 等）；B 档**既能本地处理**（`egress=none`，数据不出域）**也能对外公开检索**（`network=public-retrieval`，如 ct-protocol 调 ct-registry / ct-literature 抓取公开试验设计与文献作参考——仅公开查询词出域）；或需审批出站（`egress=approval-req`，如 ct-eligibility）。但**均不对外公开发布**；涉密输入绝不随包 / 出站；若有定制 / 本地部署需求，欢迎与作者联系。
 >
 > 📧 联系方式：medstatstar@gmail.com，张文彤（Wintone Zhang）

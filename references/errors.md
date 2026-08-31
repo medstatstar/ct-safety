@@ -15,18 +15,34 @@ Companion to the `## Errors` section of SKILL.md. Full error table preserved her
 
 ## Diagnostic / regression harnesses
 
-- `tests/run_tests.py` — stdlib-only regression suite (no pytest). Offline (mock
-  network) covers pure functions / modules / render / `run` branches.
-  - `python tests/run_tests.py` (offline) / `--live` (real openFDA) /
-    `CT_SAFETY_LIVE=1 python tests/run_tests.py`.
-- `tests/_mocks.py` — offline network stub: synthetic but internally consistent
-  FAERS counts drive `run` branches without consuming quota.
-- `tests/diagnose_rounds.py` — adversarial per-iteration harness: 10 scenarios per
-  iteration (simple→complex, every code path), auto-classifies CRASH/ANOMALY/OK with
-  hardcoded contract checks (zero co-occurrence must not fabricate a signal; negative
-  cells must not crash; score ∈ [0,100]; tier ∈ {T1–T4}; `map_soc` correctness).
-  - `python tests/diagnose_rounds.py --iter 1` / `--iter all` (100 cases) / `--list`.
-  - 10 themed iterations: ① numeric/2×2 edge ② SOC mapping ③ benchmark/compare/multi
-    ④ trend ⑤ score/tier/label/cn-pv/control ⑥ control-validation+continuity
-    ⑦ CLI-flag combos ⑧ case-level integration ⑨ adversarial/fuzz ⑩ previously-fixed
-    bug regression.
+> **Maintainer-only (not shipped).** The suites below live in the local `tests/`
+> directory, which is **not tracked by git and not shipped to any publish target**
+> (GitHub / ClawHub / SkillHub) per ct-base §16.8. Installed packages contain no
+> test code; these paths are documented for maintainers running from a local
+> checkout. Both suites are stdlib-only (no pytest) and run offline by default, so
+> they never consume openFDA quota unless a case explicitly goes live.
+
+- `tests/mode_b_test.py` — broad hardening suite (ct-update methodology §11.1),
+  10 cases across difficulty tiers:
+  - **Simple (1–3):** happy path for all four methods (strong signal / no signal /
+    EBGM standalone).
+  - **Middle (4–6):** boundary & abnormal inputs (continuity correction /
+    structural zero `a==0` / negative-count clamping).
+  - **Complex (7–10):** cross-function coupling (signal_score tiering / Naranjo
+    causality / MedDRA coding) and a live end-to-end run (`--validate-controls`
+    against openFDA positive & negative controls).
+  - `python tests/mode_b_test.py` — case 10 needs openFDA reachability; its failure
+    does not block the offline cases.
+
+- `tests/mode_c_test.py` — deep per-branch suite (F1–F11), one simple + one complex
+  case per functional branch: `compute` four methods; EBGM shrinkage (incl. `a==0`);
+  signal_score composite + T1–T4 tiering; Naranjo causality (incl. reverse polarity);
+  verbatim→PT coding; multi-source aggregation; drug-name resolution
+  (exact / fuzzy / non-ASCII); PT→SOC mapping; top-events degradation with no
+  `--event`; export rendering (HTML / XLSX must not crash); main-flow input parsing
+  (`--no-resolve-drug-name` / `--code-verbatim`).
+  - `python tests/mode_c_test.py`
+
+- Contract checks asserted by both suites (regression guards for previously-fixed
+  bugs): a zero co-occurrence must **not** fabricate a signal; negative cells must
+  **not** crash; score ∈ [0,100]; tier ∈ {T1–T4}; `map_soc` correctness.

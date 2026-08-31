@@ -274,7 +274,18 @@ def fetch_case_reports(drug, event=None, field="patient.drug.medicinalproduct",
         search = '%s AND patient.reaction.reactionmeddrapt:"%s"%s' % (drug_term, event, clause)
     else:
         search = drug_term + clause
-    limit = min(int(n), 100)
+    # HARD LIMIT (single page, no pagination): this helper issues ONE request,
+    # so anything above PAGE_MAX is silently dropped. Warn loudly instead of
+    # truncating without a word, and point at the paginating path for large
+    # pulls (mirrors fetch_reports.py's clamp warning, §13.7 "触顶行为").
+    PAGE_MAX = 100
+    limit = min(int(n), PAGE_MAX)
+    if int(n) > PAGE_MAX:
+        print("[WARN] requested %d case reports, but this single-page helper "
+              "caps at %d — truncated to %d. For larger pulls use the "
+              "paginating path instead: scripts/fetch_reports.py --max <n> "
+              "(hard cap %d, ~60s per 100-record page)."
+              % (n, PAGE_MAX, PAGE_MAX, 10000))
     j = _get_json(_q(search, limit=limit, api_key=api_key), timeout=timeout, retries=retries)
     cases = []
     for rec in j.get("results", []):

@@ -3,12 +3,12 @@ slug: ct-safety
 displayName: Clinical Trial Safety Signal / 临床试验安全信号专家
 name: ct-safety
 cn_name: 临床试验安全信号专家
-version: 0.9.1
+version: 0.9.2
 invocable: true
 required_commands: [python]
-summary: "基于 FDA FAERS 公开不良事件数据做 disproportionality 信号检测（PRR / ROR / IC / EBGM），辅助药物安全性监测；可选接入中国官方药物警戒通报（cdr-adr.org.cn）作定性佐证。检索公开不良事件数据（B 档：普通输入 + 对外检索）。"
+summary: "基于 FDA FAERS 公开不良事件数据做 disproportionality 信号检测（PRR / ROR / IC / EBGM），辅助药物安全性监测；可选接入中国官方药物警戒通报（cdr-adr.org.cn）作定性佐证。检索公开不良事件数据（A 档：普通输入 + 对外检索，network=public-retrieval）。"
 license: MIT
-description: "Signal detection on FDA FAERS (via openFDA public REST API): computes PRR / ROR / IC / EBGM with 95% CIs and signal flags from the drug-event 2x2 table. The one-shot pipeline emits TWO core deliverables by default — ① a renderable HTML report (visual conclusion) and ② an XLSX workbook holding ALL raw FAERS counts, the 2x2 table, the four methods, and FDA-label / CN-PV / score details for line-by-line audit; JSON / Markdown are kept as compatibility backups. Optional --with-cn-pv adds qualitative China official PV bulletin search (cdr-adr.org.cn) as signal corroboration. All data are public adverse-event reports; zero confidential data or information input — B-tier quickly-adoptable. / 基于 FDA FAERS（经 openFDA 公开 REST API）做药物-事件 disproportionality 信号检测，计算 PRR / ROR / IC / EBGM 及 95% 置信区间与信号判定；一次性流水线默认产出两份核心交付物——① 可渲染的 HTML 报告（可视化结论）② XLSX 数据簿（含全部原始 FAERS 计数、2×2 表、四种方法及 FDA 标签/CN-PV/评分明细，供逐条查阅与审计）；同时保留 JSON / Markdown 作兼容备份。可选 --with-cn-pv 增加中国官方药物警戒通报（cdr-adr.org.cn）定性检索作信号佐证。所有数据均为公开不良事件报告，不输入任何保密数据或信息，B 档（普通数据输入 + 对外检索），可快速推广技能。"
+description: "Signal detection on FDA FAERS (via openFDA public REST API): computes PRR / ROR / IC / EBGM with 95% CIs and signal flags from the drug-event 2x2 table. The one-shot pipeline emits TWO core deliverables by default — ① a renderable HTML report (visual conclusion) and ② an XLSX workbook holding ALL raw FAERS counts, the 2x2 table, the four methods, and FDA-label / CN-PV / score details for line-by-line audit; JSON / Markdown are kept as compatibility backups. Optional --with-cn-pv adds qualitative China official PV bulletin search (cdr-adr.org.cn) as signal corroboration. All data are public adverse-event reports; zero confidential data or information input — A-tier (network=public-retrieval), quickly adoptable. / 基于 FDA FAERS（经 openFDA 公开 REST API）做药物-事件 disproportionality 信号检测，计算 PRR / ROR / IC / EBGM 及 95% 置信区间与信号判定；一次性流水线默认产出两份核心交付物——① 可渲染的 HTML 报告（可视化结论）② XLSX 数据簿（含全部原始 FAERS 计数、2×2 表、四种方法及 FDA 标签/CN-PV/评分明细，供逐条查阅与审计）；同时保留 JSON / Markdown 作兼容备份。可选 --with-cn-pv 增加中国官方药物警戒通报（cdr-adr.org.cn）定性检索作信号佐证。所有数据均为公开不良事件报告，不输入任何保密数据或信息，A 档（普通数据输入 + 对外检索，network=public-retrieval），可快速推广技能。"
 triggers:
   - "FAERS safety signal"
   - "安全性信号分析"
@@ -28,8 +28,8 @@ metadata:
   homepage: "https://github.com/medstatstar/ct-safety"
 permissions:
   scope: "user-space-only"
-  network: "optional"
-  network_note: "Reads only public sources: FDA FAERS / openFDA (https://api.fda.gov/drug/event.json) and, when --with-cn-pv, the public columns of cdr-adr.org.cn (国家不良反应监测中心; no WAF, no key). No confidential input; ordinary input + public retrieval (B-tier). NMPA main site is WAF-blocked (HTTP 412) and intentionally excluded. Low-frequency, keyless FAERS; optional --api-key raises quota."
+  network: "public-retrieval"
+  network_note: "Reads only public sources: FDA FAERS / openFDA (https://api.fda.gov/drug/event.json) and, when --with-cn-pv, the public columns of cdr-adr.org.cn (国家不良反应监测中心; no WAF, no key). No confidential input; ordinary input + public retrieval (A-tier, network=public-retrieval per ct-base §11). NMPA main site is WAF-blocked (HTTP 412) and intentionally excluded. Low-frequency, keyless FAERS; optional --api-key raises quota."
   filesystem: "read-only to its own files; writes outputs ONLY to the user-specified --out-dir (default: current working directory). No system-path or hidden logging; any operational log (e.g. safety_err.log) is written under --out-dir (out_live/), never outside it, and FAERS raw responses are not persisted unless the user explicitly saves them."
   data: "no confidential data input; no external transmission of user data"
 
@@ -63,7 +63,7 @@ This skill responds in the user's current input language and auto-detects / swit
 - **Audience.** This skill is intended for **pharmacovigilance / clinical-trial methodologists and drug-safety professionals**. It is a methodologic signal-screening aid, not end-user health software.
 - **Not a clinical or regulatory decision tool.** All outputs are **statistical disproportionality signals** computed from *spontaneous* adverse-event reports (FDA FAERS), which are subject to reporting bias, under-reporting, and confounding. A signal **does NOT establish causation** and **MUST NOT** be used to start, stop, or change any medication, or to make clinical or regulatory decisions. Always corroborate with RCTs, product labels, and qualified clinical/regulatory judgment (ICH E2 family).
 - **Data flow (transparent).** Reads ONLY public sources — FDA FAERS / openFDA and, optionally, the public columns of cdr-adr.org.cn. Writes outputs SOLELY to the user-specified `--out-dir` (default: current working directory). **No system-path or hidden logging**; any operational log (e.g. `safety_err.log`) is written ONLY under `--out-dir` (e.g. `out_live/`), never outside it, and FAERS raw responses are not persisted unless the user explicitly saves them. Zero confidential data input; no user data is transmitted externally.
-- **Dev artifacts excluded from the runtime package.** The `tests/` directory (regression harness) is shipped only in the source repo, not in the installed runtime package.
+- **Dev artifacts excluded from every publish target.** The `tests/` directory (regression harness) is not tracked by git and is shipped to **no** publish target — GitHub, ClawHub, or SkillHub (ct-base §16.8). It stays on the maintainer's local disk only; the installed package contains no test code.
 
 ## PurposeRun pharmacovigilance disproportionality analysis on FDA FAERS public adverse-event data to surface potential drug–event safety signals (PRR / ROR / IC / EBGM), supporting clinical-trial safety surveillance and label / signal screening. Optional China official PV bulletins (cdr-adr.org.cn) provide qualitative corroboration only.
 
@@ -71,7 +71,7 @@ This skill responds in the user's current input language and auto-detects / swit
 
 | Source | Access | Status |
 |---|---|---|
-| FDA FAERS (`drug/event.json`) | Official public REST API, direct-connect, no key needed (low-frequency) | Required (B-tier, quantitative) |
+| FDA FAERS (`drug/event.json`) | Official public REST API, direct-connect, no key needed (low-frequency) | Required (A-tier, quantitative) |
 | FDA Label (`drug/label.json`) | Same openFDA, no key; adverse_reactions / warnings | Optional `--with-fda-label` (3rd source) |
 | cdr-adr.org.cn | Public columns scraped (no WAF, no key) | Optional `--with-cn-pv` (qualitative only) |
 
@@ -132,7 +132,7 @@ Full formulas, thresholds, EBGM/MGPS math, FDR, aROR, trend, and the score/tier 
 ## ⚠️ Safety
 
 - Network: retrieval (present / `--out-xlsx`) runs lightweight openFDA `count` facet queries (seconds, no case download); **case-level download requires explicit `--run`** (throttled by HARD_CAP=10000).
-- Reads FAERS public reports ONLY — **zero confidential data or information input** (B-tier).
+- Reads FAERS public reports ONLY — **zero confidential data or information input** (A-tier, `network=public-retrieval`).
 - China PV bulletins are **qualitative narrative** — NO per-drug-event counts; must **NOT** feed disproportionality; only corroborate a FAERS signal.
 - FAERS re-ingests the same case as follow-up versions and via multiple reporters. Case-level de-duplication fixes the **individual-case listing** only; disproportionality counts come from openFDA **aggregate** endpoints and therefore still carry duplicate-reporting bias. Never claim a signal is "de-duplicated".
 - Signal detection is for screening, not causal conclusion; regulatory submission (DSUR / PBRER / label change) must be assessed per GCP / ICH E2 separately.
@@ -199,7 +199,10 @@ Atomic-task unit index: `references/units.md`. Changelog: `references/changelog.
 
 ## Regression Tests
 
-Stdlib-only suite (no pytest): `python tests/run_tests.py` (offline) / `--live` (real openFDA). `tests/_mocks.py` stubs network; `tests/diagnose_rounds.py` runs 10×10 adversarial cases (CRASH/ANOMALY/OK). Details in `references/errors.md`.
+Maintainer-only (stdlib, no pytest; **not shipped** — see "Dev artifacts excluded" above):
+`python tests/mode_b_test.py` (10 hardening cases across simple→complex tiers; case 10 goes live
+against openFDA) and `python tests/mode_c_test.py` (F1–F11, one simple + one complex case per
+functional branch). Both run offline by default. Details in `references/errors.md`.
 
 ## Bug Reporting (ct-base §20.3, adapter: `adapters/bug_report.py`)
 

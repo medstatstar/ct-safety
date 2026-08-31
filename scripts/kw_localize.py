@@ -29,8 +29,14 @@ Two-phase resolution policy (ct-registry optimization 2026-07-24)
 
 Design constraints (ct- library philosophy)
 -------------------------------------------
-- Local-first, offline. No live translation API call (keeps zero-secret egress
-  and works air-gapped). `_EXTRA` (externalized in kw_lexicon.json) is a small curated safety net only.
+- Local-first, offline by default. The curated lexicon is authoritative; an
+  online translation API is used ONLY as a last-resort fallback when the
+  lexicon misses (`online_translate()`, keyless public endpoint, keeps
+  zero-secret egress; disable via env `CT_TRANSLATE_ONLINE=0` or CLI
+  `--no-online-translate`). `_EXTRA` (externalized in kw_lexicon.json) is a
+  small curated safety net only. (2026-08-25: policy relaxed from
+  "no live translation API" to "local-first, online fallback on miss" — see
+  ct-base references/keyword_expand.md.)
 - Deterministic and auditable: every switch / miss is logged by the caller.
 
 Public API
@@ -43,6 +49,12 @@ Public API
         term_map : translated via the curated map -> result = translation
         miss     : not in map, opposite language -> result = original (CALLER
                    should trigger the confirm gate)
+  online_translate(text, target_lang) -> str | None
+      Last-resort keyless online translation (Google gtx endpoint); None on
+      any failure / when disabled (env CT_TRANSLATE_ONLINE=0). Never raises.
+  localize_with_fallback(text, target_lang) -> (result, source)
+      Localize, then online-fallback on miss. source in {"empty","same",
+      "term_map","online","miss"}.
   localize_for_source(text, source) -> (result, source)
       source in {"ctgov","cde","chictr","eu_ctr","isrctn","drks","ictrp"}.
   bilingual_pair(text) -> (zh, en)
@@ -259,6 +271,83 @@ def localize(text, target_lang):
             result = pat.sub(zh_term, result)
             changed = True
     return result, ("term_map" if changed else "miss")
+
+
+# ---------------------------------------------------------------------------
+# Online translation fallback (2026-08-25, ct-base references/keyword_expand.md)
+# Local-first policy: the lexicon above is authoritative; the online API is
+# consulted ONLY when a keyword misses locally, and only while enabled
+# (default on; disable via env CT_TRANSLATE_ONLINE=0 or CLI
+# --no-online-translate for air-gapped / confidential searches).
+# Keyless public endpoint (Google gtx) keeps zero-secret egress. Any failure
+# returns None and the caller degrades to the confirm gate — never blocks.
+# ---------------------------------------------------------------------------
+_CT_TRANSLATE_ONLINE = os.environ.get("CT_TRANSLATE_ONLINE", "1").strip().lower() \
+    not in ("0", "false", "no", "off")
+
+
+def online_translate(text, target_lang="en", timeout=8):
+    """Best-effort keyless online translation — last-resort fallback.
+
+    Primary endpoint: MyMemory (api.mymemory.translated.net, free, no key,
+    per-IP daily quota); fallback: Google gtx public endpoint (unreachable in
+    CN networks, kept as backup). Returns the translated string, or None when
+    disabled / on any failure (network, timeout, malformed payload). Never
+    raises. Only call after the local lexicon has missed.
+    """
+    if not _CT_TRANSLATE_ONLINE or not text:
+        return None
+    if detect_lang(text) == target_lang:
+        return None
+    import urllib.parse
+    import urllib.request
+    sl, tl = ("zh-CN", "en") if target_lang == "en" else ("en", "zh-CN")
+    q = urllib.parse.quote(text)
+
+    def _get(url):
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+
+    # 1) MyMemory (primary, CN-reachable, free & keyless)
+    try:
+        data = _get("https://api.mymemory.translated.net/get?q=%s&langpair=%s|%s"
+                    % (q, sl, tl))
+        if data.get("responseStatus") == 200:
+            out = (data.get("responseData") or {}).get("translatedText") or ""
+            out = out.strip()
+            if out and out.lower() != text.lower():
+                return out
+    except Exception:  # noqa: BLE001
+        pass
+    # 2) Google gtx (backup; may time out in CN networks)
+    try:
+        data = _get("https://translate.googleapis.com/translate_a/single"
+                    "?client=gtx&dt=t&sl=%s&tl=%s&q=%s" % (sl, tl, q))
+        seg = data[0] if isinstance(data, list) and data else None
+        parts = [s[0] for s in seg if isinstance(s, list) and s and s[0]] \
+            if isinstance(seg, list) else []
+        out = "".join(parts).strip()
+        if out:
+            return out
+    except Exception:  # noqa: BLE001  (fallback must never raise)
+        pass
+    return None
+
+
+def localize_with_fallback(text, target_lang):
+    """Localize, then fall back to the online API on a local miss.
+
+    Returns (result, source) with source in
+    {"empty","same","term_map","online","miss"}.
+    """
+    result, st = localize(text, target_lang)
+    if st != "miss":
+        return result, st
+    tr = online_translate(text, target_lang)
+    if tr:
+        return tr, "online"
+    return result, "miss"
 
 
 def localize_for_source(text, source):

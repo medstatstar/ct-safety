@@ -1133,7 +1133,10 @@ def main():
     # R14 ②: individual FAERS case safety reports (case_id linkage)
     ap.add_argument("--case-level", type=int, default=0,
                     help="R14 ②: fetch up to N individual FAERS case safety reports "
-                         "(case_id linkage). 0 = off.")
+                         "(case_id linkage). 0 = off. Requires --event (ignored "
+                         "otherwise). NOTE: single-page fetch, hard cap 100 — "
+                         "larger N is truncated with a warning; for bulk pulls "
+                         "use scripts/fetch_reports.py --max <n> instead.")
     # P1-A: case-level de-duplication of the individual-case listing (pure local)
     ap.add_argument("--no-case-dedup", action="store_true",
                     help="P1-A: 关闭个案级去重（默认开启：L1 折叠同一 safetyreportid 的"

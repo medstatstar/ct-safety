@@ -1,5 +1,65 @@
 # Changelog — ct-safety
 
+## v0.9.2 (2026-08-31) · ct-base §16 预发布合规修复 + §13.7 / §16.6 实测留痕（未发布）
+
+### Fixed / 修复
+- **i18n 消息文件缺失（用户可见裸 key，最严重）**：`scripts/i18n_messages.json` 从未被 git 跟踪，
+  导致 `i18n.py` 加载时静默降级为 `{}`、`export_xlsx.py` 的所有 `t()` 调用直接返回裸 key
+  （用户看到 `xlsx.safety.banner` 这类键名而非译文）。已从 ct-base 同步该文件（237 条词条，
+  含 ct-safety 专属的 `xlsx.safety.*` 71 条）。验证：57 个静态 key + 全部动态拼接 key
+  （`xlsx.safety.block.*` / `.label.*` / `.note.*`）均可解析，零裸 key。
+- **共享件漂移同步（§16.8）**：`scripts/i18n.py`（补 `detect_text_language` /
+  `resolve_user_language`）、`scripts/kw_localize.py`（补 `online_translate`）、
+  `scripts/kw_lexicon.json`（`extra` 补 5 词：呕吐 / 恶心 / 恶心呕吐 / 止吐 / 佐妥昔单抗）、
+  `references/language_policy.md`（27 → 93 行，补 `xlsx.safety.*` 词条归属说明）。
+  经 AST 符号比对确认底座为叶子超集，覆盖式同步无丢失。
+- **`tests/` 退出 git 跟踪（§16.8）**：14 个测试文件移出索引（磁盘保留，本地仍可跑回归），
+  `git add -A --dry-run` 已不含 `tests/`。同时修正 `.clawhubignore` 中与之矛盾的过时注释
+  （原文称「.gitignore 故意保留 tests 以便审计」，与 §16.8 L126-127 冲突）。
+- **档位由 B 档更正为 A 档（§11）**：ct-base §11 明列 ct-safety 为 A 档
+  `network=public-retrieval`（输入为药名 / 事件名，非涉密）。SKILL.md `permissions.network`
+  由 `optional` 改为 `public-retrieval`，并同步 SKILL.md 与两份 README 共 9 处自称。
+  原「B 档」自称与本库「B 档不公开发布」的定义自相矛盾（本技能已公开发布）。
+- **死链修正**：SKILL.md 与 `references/errors.md` 原引用 `tests/run_tests.py` /
+  `tests/_mocks.py` / `tests/diagnose_rounds.py`——**三个文件均不存在**。已改为实际存在的
+  `tests/mode_b_test.py` / `tests/mode_c_test.py`，并标注为 maintainer-only、不随包发布。
+- **`--case-level` 静默截断（本轮发现）**：`fetch_faers.py:277` 硬编码 `min(n, 100)`，
+  传 `--case-level 10000` 实得 100 条且**无任何提示**。现加 `[WARN]` 说明截断与替代路径
+  （`fetch_reports.py --max`，HARD_CAP=10000）；CLI help 同步标注单页上限 100 及
+  「需配合 `--event`」（原 help 未说明，无 `--event` 时该参数静默失效）。
+- **`adapters/` 内 `ct-samplesize` 残留**：`adapters/__init__.py` docstring 与
+  `adapters/bug_report.py` 的 schema 注释、`__main__` 自检示例均来自 ct-samplesize，已全部
+  改为 ct-safety 语境（示例改为 disproportionality / ROR_MISMATCH）。
+
+### Added / §13.7 耗时与检索量警告（两份 README 新增独立章节）
+数值全部来自 2026-08-31 真实运行（药物 `candesartan`，匹配 53,248 条，匿名免 key 配额，
+上海 / 约 200 Mbps），非臆测：
+
+| 负载 | 命令形态 | 实测 wall-clock | 产出 |
+|---|---|---|---|
+| 概览（count-facet 快取，默认路径） | `ct_safety.py --drug candesartan --run` | **6 s** | 53,248 匹配，top-10 反应 |
+| 信号 + 100 条个案 | `… --event NAUSEA --case-level 100 --run` | **57 s** | 100 条个案 |
+| 批量下载 | `fetch_reports.py --max 500 --run` | **311 s**（5 页，≈62 s/页） | 500 条 |
+| 满上限外推值 | `--max 10000`（100 页） | **≈103 min**（按 62 s/页外推，**非直接实测**） | 10,000 条 |
+
+### Added / §16.6 对话示例实测留痕（测试日期 2026-08-31）
+
+| 示例 | 等价 CLI 触发 | 耗时 | 通过 |
+|---|---|---|---|
+| 示例 1 · 某药高发不良事件 | `--drug candesartan --run` | 6 s | ✅ |
+| 示例 2 · 具体药物-事件信号 | `--drug candesartan --event NAUSEA --case-level 100 --run` | 57 s | ✅ |
+| 示例 3 · 中国官方 PV 佐证 | `--drug osimertinib --event PNEUMONITIS --with-cn-pv --drug-cn 奥希替尼 --event-cn 肺炎 --run` | 19 s | ✅（未命中，按预期降级并说明为最新页抽样） |
+| 示例 4 · 多药对比（Complex 菜单） | `--drug osimertinib --compare-drugs osimertinib gefitinib erlotinib --event PNEUMONITIS --run` | 42 s | ✅ aROR=1.482（95% CI 1.188–1.849） |
+| 示例 5 · Vague / grill-me 追问 | 对话层分支追问，无 CLI 等价入口 | — | ⚠️ 未在 CLI 层实测 |
+| 示例 6 · 强制真跑 | 上表全部带 `--run` | — | ✅ |
+
+> 说明：示例 5 属 §6.2 Vague 分支的对话层菜单追问，无 CLI 等价入口，本轮未在 CLI 层实测。
+> 发布前如需全覆盖，须在对话环境逐个触发补测。
+>
+> 附注：`--compare-drugs` 的语义为**第一个药 = 焦点药、其余 = 参照池**，`--drug` 不参与对比
+> 计算（与 CLI help 一致）。实测时若只写 `--compare-drugs gefitinib erlotinib`，焦点药会是
+> gefitinib 而非 `--drug` 指定的药。
+
 ## v0.9.1 (2026-08-29) · FAERS 个案级去重（P1-A，本地，未发布）
 
 ### Added / 病例级重复计数偏倚修正

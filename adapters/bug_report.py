@@ -44,9 +44,9 @@ from datetime import datetime, timezone
 # description 例外：唯一自由文本字段，用户把关制披露——可写现象/复现/期望 vs 实际/所用算法或函数/
 # 错误消息原文，必要时可含数值与研究设计；唯一边界=不写可识别身份信息；用户确认②把关；空串允许（省略键）。
 REPORT_SCHEMA = {
-    "skill": str,            # 技能名（如 "ct-samplesize"）
-    "skill_version": str,    # 技能版本（如 "4.0.7"）
-    "test": str,             # 出错检验（如 "ttest_ind"）；未知为 "unknown"
+    "skill": str,            # 技能名（如 "ct-safety"）
+    "skill_version": str,    # 技能版本（如 "0.9.1"）
+    "test": str,             # 出错检验（如 "disproportionality"）；未知为 "unknown"
     "error_type": str,       # error | engine_error | numerical_suspect | crash
     "error_code": str,       # 技能定义的错误码（如 "COZE_UNREACHABLE"）；无则 ""
     "engine_status": str,    # 引擎状态摘要（如 "coze ok" / "r_engine error"）；无则 ""
@@ -337,13 +337,13 @@ def build_followup(history: dict, locale: str = None) -> str:
 
 if __name__ == "__main__":
     # 自检：生成带问题描述的示例报告并本地落盘（不发网络）
-    demo = build_report(skill="ct-samplesize", skill_version="5.0.3",
-                        test="survival", error_type="engine_error",
-                        error_code="R_ENGINE_ERROR", engine_status="coze r engine error",
-                        description="survival 检验（ss_survival_logrank，Schoenfeld 公式）"
-                                    "输入 HR=0.75、power=0.85、1:1 分配，返回事件数 109；"
-                                    "手工复核应为 434（疑似缺 (1+r)²/r=4 因子）。"
-                                    "期望与 rpact 一致，实际偏小 4 倍。")
+    demo = build_report(skill="ct-safety", skill_version="0.9.1",
+                        test="disproportionality", error_type="numerical_suspect",
+                        error_code="ROR_MISMATCH", engine_status="local ok",
+                        description="ROR 计算（disproportionality.py，含 0.5 连续性校正）"
+                                    "输入 a=42、b=1580、c=310、d=20450，返回 ROR=1.72；"
+                                    "手工复核应为 1.75（疑似校正项方向取反）。"
+                                    "期望与 OpenEpi 一致，实际偏小。")
     print(render_report_text(demo))
     print("---")
     print(save_local_report(demo, outdir="."))

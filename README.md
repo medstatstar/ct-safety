@@ -6,7 +6,7 @@
   <img src="assets/icon.svg" width="240" height="240" alt="ct-safety logo"/>
 </div>
 
-> A safe-by-default pharmacovigilance skill that screens **FDA FAERS** public adverse-event data for drug–event safety signals (PRR / ROR / IC / EBGM with 95% CIs), with optional China official PV corroboration. Reads only public data — **zero confidential input (B-tier)**.
+> A safe-by-default pharmacovigilance skill that screens **FDA FAERS** public adverse-event data for drug–event safety signals (PRR / ROR / IC / EBGM with 95% CIs), with optional China official PV corroboration. Reads only public data — **zero confidential input (A-tier, `network=public-retrieval`)**.
 
 ## Who This Is For
 
@@ -15,6 +15,26 @@ The `ct-*` clinical-trial skill family covers the entire clinical-trial lifecycl
 - **Clinical-trial practitioners at pharmaceutical companies** — sponsors, CROs, and medical / statistical / regulatory roles;
 - **Clinicians and nurses who design, manage, or run clinical-trial projects**;
 - **Medical students who want to learn clinical-trial methodology in a structured way**.
+
+## Time & Volume Warning
+
+> ⚠️ **Runtime and download limits.** This skill queries openFDA over the public internet, so wall-clock time scales with how many individual case reports you pull. Measured on **2026-08-31** (drug `candesartan`, 53,248 matching reports, keyless anonymous quota, Shanghai / ~200 Mbps):
+>
+> | Workload | Command shape | Measured wall-clock | Output |
+> |---|---|---|---|
+> | **Overview** (count-facet, the default path) | `ct_safety.py --drug candesartan --run` (no `--event`) | **6 s** | 53,248 matched reports, top-10 reactions |
+> | **Signal + 100 cases** | `ct_safety.py --drug candesartan --event NAUSEA --case-level 100 --run` | **57 s** | 100 individual cases |
+> | **Bulk download** | `fetch_reports.py --drug candesartan --max 500 --run` | **311 s** (5 pages, ≈62 s per 100-record page) | 500 raw reports |
+> | **Extrapolated full cap** | `--max 10000` = 100 pages | **≈103 min** (extrapolated from the 62 s/page rate above — not directly measured) | 10,000 raw reports |
+>
+> **Per-run limits (match the implementation):**
+> - `fetch_reports.py --max <n>` → hard cap **10,000** (`HARD_CAP`); larger values are auto-clamped with a `[WARN]`.
+> - `ct_safety.py --case-level <n>` → **single-page** fetch, hard cap **100**; larger values are truncated with a `[WARN]`. It also requires `--event` (silently ignored otherwise). For bulk pulls use `fetch_reports.py --max` instead.
+> - openFDA quota: anonymous 240 req/min, 1,000 req/day per IP; free key 240 req/min, 120,000 req/day per key. Per-request timeout 120 s.
+>
+> **What happens at the limit / on timeout:** exceeding a cap is **not an error** — the run truncates to the cap, prints `[WARN] ... clamped/truncated`, and returns partial results. Quota exhaustion returns HTTP **429**; add `--api-key` or lower your request rate. A single page timing out raises a retry-able error after 3 attempts.
+>
+> **How to avoid long waits:** start with the seconds-level overview to size the population before committing to a download; narrow the window with `--date-from` / `--date-to`; grow `--max` gradually (500 → 2000 → …); and register a free openFDA key to lift the daily quota.
 
 ## How to Use (in conversation)
 
@@ -134,6 +154,15 @@ A key is **not required** — openFDA runs anonymously (240 req/min, 1,000 req/d
 
 Never share your key in a chat message or put it in any file that ships with the skill — the key stays local and is only sent over HTTPS to the official openFDA API.
 
+**Q: What if I found an error in the result — how do I report it?**
+A: This skill follows the ct-base §20.3 bug-report workflow. If you suspect the result is wrong (or the engine errored), just say **"report a bug" / "上报问题" / "提交错误报告"**. The skill also **proactively asks** whether to report when it detects a likely defect (e.g. the engine errors or retries still fail) — at most **once per session**, and you can always decline. Either way, the assistant will:
+1. **Propose a sanitized report** (11-field whitelist: skill / skill_version / test / error_type / error_code / engine_status / description / locale / query_origin / session_hash / attempts — **no raw input values or personal data**, except the `description` field where you decide what to disclose, e.g. the algorithm/function used and the error message);
+2. **Show the full report text for your review** — you can add a problem description or correct anything before confirming;
+3. **Send after your explicit confirmation** — to the unified endpoint `https://ct-bugreport.coze.site/run` (if this session called coze) or saved locally + emailed to the author (if purely local, data never leaves your machine);
+4. **Receive an acknowledgment** — including whether a previously submitted report from your source has already been fixed (with the fix note) or is still pending.
+
+You stay in full control: the report is shown to you **before** anything is sent, and nothing is transmitted without your explicit "send" confirmation.
+
 ## Safety (safe preview)
 
 **Two-step workflow, safe by default.** Step 1 (overview: totals + Top-N) runs automatically. Step 2 (detailed retrieval / signal detection) runs **only after you explicitly confirm** — or when you say "calculate directly". Nothing heavy executes until then, so a casual question never triggers a large download.
@@ -143,7 +172,7 @@ Never share your key in a chat message or put it in any file that ships with the
 - **FDA Label** via openFDA `drug/label.json` when `--with-fda-label` is used (optional third source);
 - **国家不良反应监测中心** `cdr-adr.org.cn` public columns when `--with-cn-pv` is used (optional, qualitative corroboration only — narrative bulletins, no case counts, never fed into disproportionality).
 
-There is **zero confidential data or information input** (B-tier: ordinary input + public retrieval). The NMPA main site is WAF-blocked (HTTP 412) and is intentionally excluded. Your openFDA key, if used, is **stored only locally** and sent **only over HTTPS to the official openFDA API**.
+There is **zero confidential data or information input** (A-tier: ordinary input + public retrieval, `network=public-retrieval`). The NMPA main site is WAF-blocked (HTTP 412) and is intentionally excluded. Your openFDA key, if used, is **stored only locally** and sent **only over HTTPS to the official openFDA API**.
 
 **Bug-report endpoint disclosure (ct-base §5 / §20.3, mandatory).** When you confirm sending a (sanitized) error report via the in-skill bug reporter (`adapters/bug_report.py`), the skill sends **only** the 11-key whitelist envelope (skill name / version / error type / error code / engine status / your free-text `description` / locale / `query_origin` / session hash / retry count / test) to the unified bug-report endpoint `https://ct-bugreport.coze.site/run`. It sends **no analysis data and no personal identifiers** — `description` is the only free-text field and you review it before consent (hard boundary: no identifiable person/institution/subject info). If you decline, nothing is sent; if there is no cloud call this session, the report is saved locally instead (`save_local_report`, data never leaves the machine).
 
@@ -157,7 +186,7 @@ Developer CLI, parameters, data-source boundaries, and error handling live here 
 
 | Source | Access | Status |
 |---|---|---|
-| FDA FAERS (openFDA `drug/event.json`) | Official public REST API, direct-connect, low-frequency no-key | Required (B-tier, quantitative) |
+| FDA FAERS (openFDA `drug/event.json`) | Official public REST API, direct-connect, low-frequency no-key | Required (A-tier, quantitative) |
 | FDA Label (openFDA `drug/label.json`) | Same openFDA, no key; `adverse_reactions` / `warnings` | Optional `--with-fda-label` (labeled vs unlabeled risk) |
 | 国家不良反应监测中心 (cdr-adr.org.cn) | Public columns scraped (药物警戒快讯 / 数据报告 / 通知通告 / 器械·化妆品警戒快讯); no WAF, no key | Optional `--with-cn-pv` (qualitative corroboration only) |
 
@@ -250,11 +279,9 @@ For feature requests, bug reports, or other feedback, please contact the author 
 
 ## Confidentiality Notice
 
-> The CT series consists of 20+ specialized domain skills, organized into two tiers — A, B — by "confidential-data-exfiltration risk + whether external retrieval is needed", providing full coverage of the entire new-drug clinical trial (Clinical Trial) lifecycle.
+> The CT series consists of 20+ specialized domain skills, organized into **two tiers — A, B** — by "whether the input contains confidential information" (network / egress / publish are independent orthogonal attributes; see ct-base §11), providing full coverage of the entire new-drug clinical trial (Clinical Trial) lifecycle.
 >
-> - **Tier A (non-confidential · public)**: takes only ordinary (non-confidential) input; runs fully locally (`network=off`) or performs public retrieval (`network=public-retrieval`, e.g. ct-registry / ct-advisor) — never involves confidential information. Tier A skills are published openly on GitHub.
-> - **Tier B (confidential · internal)**: involve strictly confidential clinical-trial data and internal information from pharma sponsors (e.g., ct-analysis, ct-sdtm, ct-eligibility); Tier B is processed locally (`egress=none`, data never leaves the machine) or requires approved egress (`egress=approval-req`, e.g. ct-eligibility). These skills are designated for internal enterprise use only and are not publicly released at present.
->
-> If you do have a genuine need for these confidential skills, please contact the author to request custom installation.
+> - **Tier A (non-confidential input)**: run fully locally using only ordinary data; Tier A may need external public retrieval but involves no confidential information. These skills are published openly on GitHub.
+> - **Tier B (confidential input)**: accept strictly confidential clinical-trial data / protocols / CRFs from pharma sponsors (e.g., ct-analysis, ct-sdtm, ct-protocol, ct-eligibility); Tier B is processed locally and never leaves the boundary (egress=none), or additionally requires policy approval (egress=approval-req, e.g. ct-eligibility). Tier B packages contain zero confidential data but are NOT publicly published (stays fully local) — confidential input never ships with the package or leaves the machine. For custom / on-prem deployment, contact the author.
 >
 > 📧 Contact: medstatstar@gmail.com (Wintone Zhang / 张文彤)
