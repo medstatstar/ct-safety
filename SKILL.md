@@ -44,15 +44,11 @@ This skill responds in the user's current input language and auto-detects / swit
 
 ## Cross-turn Continuity (跨轮连续性 · 必须)
 
-> 家族标准见 `ct-base/references/continuity.md`（模式 A）。多轮追问（换 event / 对比另一药 / 换 measure）时，前轮的检索设定必须无损继承，**不能只凭 LLM 记忆**。
-
-每次分析后**回显设定块**：
+Family standard: `ct-base/references/continuity.md` (pattern A). Echo the block below after every analysis; on a follow-up (changed `event` / different comparator drug / different measure), read the most recent block in the conversation and override **only the changed fields** — never rely on LLM memory alone:
 
 ```
 ## 当前检索设定：drug=… | event=… | comparator=… | measure=PRR | source=FAERS
 ```
-
-追问时 LLM **必须读取对话中最近一个设定块，只覆盖变化字段**（如只改 `event`），其余原样继承，再发远端/再跑脚本。
 
 # Clinical Trial Safety Signal
 
@@ -72,7 +68,9 @@ This skill responds in the user's current input language and auto-detects / swit
 - **Data flow (transparent).** Reads ONLY public sources — FDA FAERS / openFDA and, optionally, the public columns of cdr-adr.org.cn. Writes outputs SOLELY to the user-specified `--out-dir` (default: current working directory). **No system-path or hidden logging**; any operational log (e.g. `safety_err.log`) is written ONLY under `--out-dir` (e.g. `out_live/`), never outside it, and FAERS raw responses are not persisted unless the user explicitly saves them. Zero confidential data input; no user data is transmitted externally.
 - **Dev artifacts excluded from every publish target.** The `tests/` directory (regression harness) is not tracked by git and is shipped to **no** publish target — GitHub, ClawHub, or SkillHub (ct-base §16.8). It stays on the maintainer's local disk only; the installed package contains no test code.
 
-## PurposeRun pharmacovigilance disproportionality analysis on FDA FAERS public adverse-event data to surface potential drug–event safety signals (PRR / ROR / IC / EBGM), supporting clinical-trial safety surveillance and label / signal screening. Optional China official PV bulletins (cdr-adr.org.cn) provide qualitative corroboration only.
+## Purpose
+
+Run pharmacovigilance disproportionality analysis on FDA FAERS public adverse-event data to surface potential drug–event safety signals (PRR / ROR / IC / EBGM), supporting clinical-trial safety surveillance and label / signal screening. Optional China official PV bulletins (cdr-adr.org.cn) provide qualitative corroboration only.
 
 ## Data Sources
 
@@ -82,9 +80,7 @@ This skill responds in the user's current input language and auto-detects / swit
 | FDA Label (`drug/label.json`) | Same openFDA, no key; adverse_reactions / warnings | Optional `--with-fda-label` (3rd source) |
 | cdr-adr.org.cn | Public columns scraped (no WAF, no key) | Optional `--with-cn-pv` (qualitative only) |
 
-**Key mechanism:** openFDA works keyless (anonymous 240 req/min, 1,000 req/day per IP); an optional free key only raises quota. The key, when used, is **stored locally only** (env var / local `.env`) and sent **only over HTTPS to the official openFDA endpoint** — never to any third party. NMPA main site is WAF-blocked (HTTP 412) and intentionally excluded. All data are public adverse-event reports; zero confidential input.
-
-See `references/fetch_pipeline.md` for endpoint details, indexable/non-indexable fields, and `count` endpoint pitfalls.
+**Key mechanism:** openFDA works keyless (anonymous 240 req/min, 1,000 req/day per IP); an optional free key only raises quota. The key, when used, is **stored locally only** (env var / local `.env`) and sent **only over HTTPS to the official openFDA endpoint** — never to any third party. NMPA main site is WAF-blocked (HTTP 412) and intentionally excluded. All data are public adverse-event reports; zero confidential input. Endpoint details, indexable/non-indexable fields, and `count` endpoint pitfalls: `references/fetch_pipeline.md`.
 
 ## Methods
 
@@ -94,13 +90,7 @@ Four disproportionality measures on the drug–event 2×2 table, plus multiple-t
 - **ROR** — signal if lower 95% CI > 1.
 - **IC** (UMC/VigiBase Information Component) — signal if lower 95% CI > 0.
 - **EBGM** (FDA MGPS Bayesian shrinkage) — signal if EB05 ≥ 2.
-- **BH-FDR** Benjamini-Hochberg q-value across top-N events (R13) and benchmarks (R5).
-- **PT→SOC** MedDRA organ-class grouping (curated, "Unmapped" fallback).
-- **Continuity** Haldane-Anscombe (+0.5/cell; `a==0` and negative cells → conservative null).
-- **aROR** multi-drug adjusted ROR (`--compare-drugs`).
-- **Temporal anomaly** CUSUM / rolling-Z / changepoint (`--trend`).
-- **Safety Signal Score (0–100) + T1–T4 tier** (`--with-fda-label`).
-- **Naranjo 因果归因（定性补充，non-causal）** (`--with-causality`) — 经典 7 准则打分（Definite/Probable/Possible/Doubtful）作为因果归因定性旁证；**独立于** disproportionality，不与其混算、不喂入 PRR/ROR/IC/EBGM。
+Corroboration layers — **BH-FDR** q-value across top-N events and benchmarks; **PT→SOC** MedDRA organ-class grouping (curated, "Unmapped" fallback); **Haldane-Anscombe continuity** (+0.5/cell; `a==0` or negative cells → conservative null); **aROR** multi-drug adjusted ROR (`--compare-drugs`); **temporal anomaly** CUSUM / rolling-Z / changepoint (`--trend`); **Safety Signal Score 0–100 + T1–T4 tier** (`--with-fda-label`); **Naranjo** causality scoring (`--with-causality`, qualitative side-evidence only — Definite/Probable/Possible/Doubtful, kept independent of disproportionality and never fed into PRR/ROR/IC/EBGM).
 
 Full formulas, thresholds, EBGM/MGPS math, FDR, aROR, trend, and the score/tier weighting are in `references/methods.md`.
 
@@ -114,17 +104,14 @@ Full formulas, thresholds, EBGM/MGPS math, FDR, aROR, trend, and the score/tier 
 | Structured output (HTML + XLSX = core deliverables / JSON / MD backup, optional PNG) | — | Export — HTML (visual) + XLSX (all raw data) |
 | China official PV bulletins | cdr-adr.org.cn | Qualitative corroboration only — NOT for disproportionality |
 | Chained invocation | — | → `ct-protocol` (safety plan), → `ct-registry` (trial design) |
-| Multi-event FDR control | — | BH q-value over top-N / benchmarks |
-| PT→SOC grouping | — | Readable signal grouping |
-| Continuity + control validation | — | Sparse 2×2 guard; `--validate-controls` self-check |
+| Statistical guards | — | BH-FDR q-value over top-N / benchmarks · PT→SOC readable grouping · sparse 2×2 guard with `--validate-controls` self-check |
 | Temporal anomaly (`--trend`) | — | Quarterly CUSUM / rolling-Z / changepoint |
 | Multi-drug aROR (`--compare-drugs`) | — | Focal vs pooled-reference adjusted ROR |
 | Score 0–100 + T1–T4 (`--with-fda-label`) | FAERS×Label×CN-PV | Triangulated evidence tier |
 | Naranjo 因果归因（`--with-causality`） | FAERS 时间/去激发/再用药 + 可选 label | 定性因果归因旁证（non-causal，独立于统计信号） |
 | 信号验证工作流（`--verify-signal`） | FAERS 季度报告序列 | 时序 CUSUM/Poisson 趋势 + 剂量-反应/去卷积（确证补充；剂量-反应/去卷积需 `--case-level` 个案数据） |
 | MedDRA 编码辅助（`--code-verbatim`） | verbatim AE 术语 | verbatim→PT 模糊匹配（内置字典；LLM 模式 opt-in，不自动开启） |
-| 信号优先级排序与风险分级（`--prioritize`） | 检测到的信号 | 多维评分（严重度×新颖性×频率×趋势×多源）→ CRITICAL/HIGH/MEDIUM/LOW |
-| Label-gap & 时间趋势优先级层（随 `--prioritize`） | `--with-fda-label` + `--trend` | 未预期风险(label-gap)+异常趋势自动抬升优先级（K 项） |
+| 信号优先级排序与风险分级（`--prioritize`） | 检测到的信号 | 多维评分（严重度×新颖性×频率×趋势×多源）→ CRITICAL/HIGH/MEDIUM/LOW；叠加 `--with-fda-label` + `--trend` 时追加 label-gap / 异常趋势抬升层（K 项） |
 | PSUR/PBRER 自动报告（`--psur`） | 检测到的信号 | 生成 CIOMS/ICH E2C(R2) 格式 PSUR Markdown（psur.md） |
 | Case-level de-duplication (on by default with `--case-level`) | FAERS individual case reports | L1 collapses follow-up `safetyreportversion` per `safetyreportid`; L2 flags suspected duplicates (demographic fingerprint + reaction-PT Jaccard, default 0.8) — flag-only unless `--drop-suspected-dupes`. Applies to the case listing ONLY; PRR/ROR/IC/EBGM come from aggregate endpoints and are NOT corrected. Disable via `--no-case-dedup` |
 | Non-ASCII drug-name auto-translate | — | `--drug 阿司匹林` → `aspirin`; disable `--no-resolve-drug-name` |
@@ -133,8 +120,7 @@ Full formulas, thresholds, EBGM/MGPS math, FDR, aROR, trend, and the score/tier 
 
 - Python 3.10+ (Anaconda `C:\Tools\anaconda3\python.exe` recommended).
 - Required: `requests`. Optional: `matplotlib` (PNG charts).
-- Network: read-only FAERS public API.
-- Optional: openFDA API key (raises quota only; never required).
+- Network: read-only FAERS public API. An openFDA key is optional (raises quota only, never required) — see below.
 
 ## ⚠️ Safety
 
@@ -155,23 +141,18 @@ Two-step, overview-first (default since v0.1.18: **present summary in context, E
 
 ### One-shot signal report (`ct_safety.py`) — two core deliverables
 
-Running `ct_safety.py --drug X --event Y` (with `--run`) writes, into `--out-dir`:
+Running `ct_safety.py --drug X --event Y` (with `--run`) writes the following into `--out-dir`, and prints a "核心交付物 / Core Deliverables" block naming ① ② at the end:
 
 - **`faers_report.html`** — the visual report (open in browser preview). **Core deliverable ①.**
 - **`faers_report.xlsx`** — the data workbook with ALL raw information: FAERS counts, the 2×2 table, the four disproportionality measures, and — when enabled — FDA Label / CN-PV / Score sheets. **Core deliverable ②; use it to audit every number.**
 - `faers_report.md` / `*.json` — compatibility backups only.
 
-The run ends by printing an explicit "核心交付物 / Core Deliverables" block naming both files.
-
 ## API Key (openFDA) — optional, self-configured
 
 The skill runs **without a key**. A free key only raises quota (240 req/min, 120,000 req/day per key). **The key is never required.** Provide it via your own configuration only (do NOT paste keys into chat or any file that ships with the skill):
 
-- CLI: `--api-key YOUR_KEY`
-- Env var: `export OPENFDA_API_KEY=YOUR_KEY` (auto-read; recommended)
-- Skill-root `.env`: `OPENFDA_API_KEY=YOUR_KEY` (git-ignored, never shipped). The value may be plaintext **or** an `obf:`-prefixed XOR+base64 blob — `resolve_api_key` auto-detects and decodes (ct-base §5 recommended for private keys).
-
-Bilingual apply steps + quota table + packaging red line: `references/openfda_api_key.md`. Skill-root `.gitignore` / `.clawhubignore` exclude `.env` / `*.key` / `credentials.json`, so a user's key can never be bundled into a published skill.
+- CLI `--api-key YOUR_KEY` · env var `OPENFDA_API_KEY` (auto-read; recommended) · skill-root `.env` (git-ignored, never shipped; plaintext or an `obf:`-prefixed XOR+base64 blob, auto-detected and decoded per ct-base §5).
+- `.gitignore` / `.clawhubignore` exclude `.env` / `*.key` / `credentials.json`, so a user's key can never be bundled into a published skill. Bilingual apply steps, quota table, and packaging red line: `references/openfda_api_key.md`.
 
 ## Errors
 
@@ -213,9 +194,4 @@ functional branch). Both run offline by default. Details in `references/errors.m
 
 ## Bug Reporting (ct-base §20.3, adapter: `adapters/bug_report.py`)
 
-- **Trigger (strong signal, max 1 proposal/session):** unexpected non-zero exit / engine or compute error / user explicitly questions the result — **and** the same operation was retried ≥1. Weak signal (just repeated tuning) never triggers.
-- **Two-stage confirmation (2026-08-21):** ① propose-with-preview — show the bilingual `confirm_prompt` **together with** the full report (`render_report_text`, state "sanitized, no input data", invite a problem description; if the user adds one, re-render and re-show before consent) → ② on explicit consent, `send_to_endpoint` (auto action=report, endpoint `https://ct-bugreport.coze.site/run`, token = embedded §5 public credential). If the user declines, never re-propose this session.
-- **Sanitization is hard:** the report carries only the 11-key whitelist (skill / version / error_type / error_code / engine_status / description / locale / query_origin / session_hash / attempts / test) — never raw data or subject records. `description` is the single free-text field for debugging, **user-reviewed**: write the symptom / reproduction / expected vs actual / algorithm or function used / error message; values and study design are OK. Hard boundary: no identifiable person/institution/subject info. The user reviews it in stage ① before consent; empty description omits the key. If the session had **no** cloud call, `save_local_report()` writes a local md + author email (data never leaves the machine).
-- **Client-only:** this adapter sends `report` only. Governance actions (get/update/download/delete — pull pending, mark done, download all, clean up) are reserved for the `ct-update` skill (author side); never call them from here.
-
-Invoke: `python adapters/bug_report.py --error-type <t> --description "<free text>" [--send]` (add `--send` only after the user confirms).
+Propose **at most once per session**, only on a strong signal (unexpected non-zero exit / engine or compute error / user questions the result) **and** after ≥1 retry — never on repeated tuning. Always two-stage: ① show the sanitized report for review → ② send only on explicit consent; never re-propose after a decline. Full rules, the 11-key whitelist, and the CLI (`python adapters/bug_report.py --error-type <t> --description "<free text>" [--send]` — `--send` only after consent) are in `references/bug_reporting.md`.

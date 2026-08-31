@@ -3,6 +3,13 @@
 ## v0.9.2 (2026-08-31) · ct-base §16 预发布合规修复 + §13.7 / §16.6 实测留痕（未发布）
 
 ### Fixed / 修复
+- **SKILL.md 超软上限（§16.1 F02）**：221 行 > 200。按 §16.1「超长须外迁长参考」处理，
+  而非删内容——Bug Reporting 的完整流程（两阶段确认、11 键白名单、client-only 边界、CLI）
+  外迁至新增的 `references/bug_reporting.md`，SKILL.md 保留触发条件与指针；
+  再压缩与 Features 表重复的 Methods 条目、与 API Key 段重复的 Requirements 条目等冗余表述。
+  **221 → 197 行**，F02 消除，spec_lint WARN 5 → 4（余 F17 ×3、F26）。
+  安全披露（Disclaimer / Data flow / ⚠️ Safety）与能力索引**一条未删**。
+  顺带修复 `## Purpose` 标题与正文挤在同一行的渲染缺陷（`## PurposeRun …`）。
 - **i18n 消息文件缺失（用户可见裸 key，最严重）**：`scripts/i18n_messages.json` 从未被 git 跟踪，
   导致 `i18n.py` 加载时静默降级为 `{}`、`export_xlsx.py` 的所有 `t()` 调用直接返回裸 key
   （用户看到 `xlsx.safety.banner` 这类键名而非译文）。已从 ct-base 同步该文件（237 条词条，
@@ -104,12 +111,13 @@
 | 3 | Intent-Code Divergence：另一 ct- 系列技能名仍命中 4 处 | MEDIUM | **判定为误报**（本行不复述该技能名字面串，理由同 #2）。4 处全部落在 ct-base 共享件内（`references/language_policy.md:3,77,83`、`scripts/i18n.py:222`），是底座文档中"以该技能为例"的正常举例，不是 ct-safety 的身份错配。改动会破坏 §16.8「叶子是底座子集」，**建议保持原样**并在审计回执中说明。 |
 
 ### 本轮未修的软上限告警（spec_lint WARN，不阻断）
-- `SKILL.md` 215 行 > 200（§16.1 软上限）；
+- ~~`SKILL.md` 超 200 行（§16.1 软上限）~~ → **已修**（见上，221 → 197 行，F02 消除）。
 - 发布集非 md 文件 45 个 > 40（§16.1 软上限）；
 - `scripts/` 内 3 处出站调用（§16.9）：`fetch_faers.py` / `fetch_fda_label.py` / `kw_localize.py`。
   §16.9 对**既有**技能只要求"**新增**出站功能归位 adapters/"，且 spec_lint 仅判 WARN 而非
   ERROR；迁移需改 5 个 py 的 import 路径 + 6 个文档引用，回归风险大于收益，故本轮未动，
-  待后续架构改造时统一处理。
+  待后续架构改造时统一处理。注：其中 `kw_localize.py` 属 ct-base 共享件（本轮同步引入），
+  非 ct-safety 自有代码，应在底座侧统一整改。
 
 ## v0.9.1 (2026-08-29) · FAERS 个案级去重（P1-A，本地，未发布）
 
