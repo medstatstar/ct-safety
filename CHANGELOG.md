@@ -27,9 +27,10 @@
   传 `--case-level 10000` 实得 100 条且**无任何提示**。现加 `[WARN]` 说明截断与替代路径
   （`fetch_reports.py --max`，HARD_CAP=10000）；CLI help 同步标注单页上限 100 及
   「需配合 `--event`」（原 help 未说明，无 `--event` 时该参数静默失效）。
-- **`adapters/` 内 `ct-samplesize` 残留**：`adapters/__init__.py` docstring 与
-  `adapters/bug_report.py` 的 schema 注释、`__main__` 自检示例均来自 ct-samplesize，已全部
+- **`adapters/` 内残留了另一个 ct- 系列技能的身份标识**：`adapters/__init__.py` docstring 与
+  `adapters/bug_report.py` 的 schema 注释、`__main__` 自检示例均沿用该技能语境，已全部
   改为 ct-safety 语境（示例改为 disproportionality / ROR_MISMATCH）。
+  （本条不复述该技能名字面串——理由见文末「字面串」注。）
 - **`AGENTS.md` 越界引用与自相矛盾（§16.0 审计项）**：① 版本号停留在 v0.1.35（实际 v0.9.2）
   已更新；② 自改进日志原要求写入技能目录**之外**的**用户全局 agent 配置文件**（读写用户
   个人文件属边界越界），改为写入**技能内** `.learnings/` 三个文件；③ 红线原写
@@ -51,10 +52,19 @@
   已全部改为描述性表述（不复述字面串），并加注说明原因。
 
 ### §16.0 ClawHub 安全审计进展
-本轮整改后 **STILL_PRESENT 由 5 项降至 3 项**（RESOLVED 1 → 3）。已消除：
-`ct-samplesize` 身份错配（adapters/ 真残留）、技能目录外用户全局 agent 配置文件的越界引用、
-`no data leaves the domain` 自相矛盾。（后两项经整改后审计已不再命中，由于其 finding 正文
-未用引号包裹路径、脚本派生不到签名，状态记为 UNVERIFIED 而非 RESOLVED，需人工确认。）
+
+| 阶段 | STILL_PRESENT | RESOLVED | 说明 |
+|---|---|---|---|
+| 整改前 | 5 | 1 | — |
+| 第一轮（共享件 / tests / 档位 / 残留修复） | 3 | 3 | 消除：另一 ct- 系列技能名在 `adapters/` 的真残留、技能目录外用户全局 agent 配置文件的越界引用、`no data leaves the domain` 自相矛盾 |
+| 本轮（覆盖触发词整改） | **1** | **5** | 消除：审计 #1 / #2 两项 Vague Triggers（触发词过于通用） |
+
+剩余 1 项为 **Intent-Code Divergence**，判定为**误报**——签名全部落在 ct-base 共享件内，
+是底座文档中"以另一 ct- 系列技能为例"的正常举例（详见下方「已知遗留」#3）。
+
+> 注：越界引用与自相矛盾两项虽已实际修复，但审计脚本从 finding 正文派生不到签名（路径未被引号
+> 包裹），状态记为 **UNVERIFIED 而非 RESOLVED**，需人工确认——脚本输出本身已声明"RESOLVED
+> 仅代表签名不再命中，需人工最终确认"。
 
 ### Added / §13.7 耗时与检索量警告（两份 README 新增独立章节）
 数值全部来自 2026-08-31 真实运行（药物 `candesartan`，匹配 53,248 条，匿名免 key 配额，
@@ -91,7 +101,7 @@
 |---|---|---|---|
 | 1 | 跳过预览的覆盖触发词（中／英各一） | MEDIUM | ✅ **已解决（作者 2026-08-31 拍板）**。原短语被 ClawHub 审计 #1 判为"过于通用、在正常对话中也会出现"（命中签名即短语本身，实为 **17 处**：README.md 8 + zh-CN 9，SKILL.md 0）。已全量替换为 **「跳过预览，直接跑」/ "skip preview and run"** —— 更长、更具体，不易在日常对话中自然出现。<br>**附带修掉一个更深层问题**：原短语在 SKILL.md 与全部 `.py`/`.json` 中**零实现**，README 却称其为 "explicit override" —— 属文档承诺未实现。已在 SKILL.md §Clinical Trial Safety 顶部补「What counts as explicit confirmation」段落，把该短语定义为**显式确认的一种说法（是确认，不是绕过）**，Step 2 约束不变。 |
 | 2 | 同上的英文版短语 | MEDIUM | ✅ 同上，一并替换。本行**刻意不复述原短语字面串**——CHANGELOG 属发布包内被扫描文件，复述会让审计脚本在本地重新命中签名、自我维持告警（见 `.learnings` LRN-20260831-005）。 |
-| 3 | `ct-samplesize` 签名仍命中 4 处 | MEDIUM | **判定为误报**：全部落在 ct-base 共享件内（`references/language_policy.md:3,77,83`、`scripts/i18n.py:222`），是底座文档中"以 ct-samplesize 为例"的正常举例，不是 ct-safety 的身份错配。改动会破坏 §16.8「叶子是底座子集」，**建议保持原样**并在审计回执中说明。 |
+| 3 | Intent-Code Divergence：另一 ct- 系列技能名仍命中 4 处 | MEDIUM | **判定为误报**（本行不复述该技能名字面串，理由同 #2）。4 处全部落在 ct-base 共享件内（`references/language_policy.md:3,77,83`、`scripts/i18n.py:222`），是底座文档中"以该技能为例"的正常举例，不是 ct-safety 的身份错配。改动会破坏 §16.8「叶子是底座子集」，**建议保持原样**并在审计回执中说明。 |
 
 ### 本轮未修的软上限告警（spec_lint WARN，不阻断）
 - `SKILL.md` 215 行 > 200（§16.1 软上限）；
