@@ -1,5 +1,30 @@
 # Changelog — ct-safety
 
+## v0.9.8 (2026-09-01) · 轻本地端：safety 检索默认外发 Coze 统一端点（本地提交，未发布）
+
+架构级变更（用户指令："本地所有的 safety 检索需求一律改为外发 coze 实现"）：
+
+- **轻本地端（thin local client）**：`adapters/coze_dispatch.py` 新建统一 dispatcher。默认外发 Coze 统一端点 `ct-search.coze.site/run`（与 ct-registry 共用），源名 `faers` / `fda_label` / `dailymed` / `rxclass` / `fda_recall` / `hk_pv`；本地仅做 disproportionality / signal_score / check_event 等计算。
+- **调用点零改动（垫片模式）**：`FaersShim` / `FdaLabelShim` 通过 rebind 全局名 `fetch_faers` / `fetch_fda_label`，`ct_safety.py` 与 `corroborative_sources.py` 所有调用点不改；`--offline` 显式回退本机直连 openFDA / NLM。
+- **Coze 侧**：`ct-registry/adapters/coze` 的 `sources.py` 白名单 +6 源、`search_node.py` +6 路由分支、`safety_rest_node.py` 新增 6 节点（`faers_node` / `fda_label_node` / `dailymed_node` / `rxclass_node` / `fda_recall_node` / `hk_pv_node`），openFDA key 走 `OPENFDA_API_KEY` / `OPENFDA_API_KEY_COZE` 环境变量。统一端点 `scripts/selfcheck.py` 35/35 passed。
+- **始终本机直连的例外**（结构化 state 无法承载或本机已可达）：`fetch_faers.query_total`（任意检索式）、`fetch_case_reports`（原始个案报告）、`fetch_fda_label.check_event`（纯本地判定）、`fetch_cn_pv`（cdr-adr.org.cn，无 WAF、Coze 对该 CN 域可达性未验证）。
+- **发布红线**：Coze 侧 `safety_rest_node.py` 需作者在 Coze 控制台上传工作流包部署后才生效；本地代码已可用，无需部署即可在 `--offline`/本机直连模式运行。外发检索路径依赖 Coze 端部署。
+- SKILL.md 数据源表 + 权限/数据流说明同步更新；frontmatter version 0.9.7→0.9.8。
+- 文档化规划：T1 三件套（Health Canada 整库下载 / PMDA JADER / TGA DAEN）可行性评估与架构决策（本地批量入库 vs 实时检索）记入 `references/roadmap_external_sources.md`，**规划中、未实现**（2026-09-01 用户决定暂缓）。同时纠正 Blocked 表：Health Canada 旧 API 不可达但 `open.canada.ca` 整库可下载，已移出"不可达"。
+- **关联调用 ct-literature `--safety` 对齐（2026-09-01 追加）**：Purpose 段新增 "chain to `ct-literature --safety`" 说明；Features 表 Chained invocation 行加入 `ct-literature --safety`，并新增「Published safety-literature corroboration」能力行，明确边界——`ct-literature --safety` 仅作定性已发表文献佐证，**不可进入 FAERS 2×2 不成比例分析**（会扭曲计数）。背景：ct-literature 侧已将「安全性相关 / Safety-Related」页改为 `--safety` 显式 opt-in（默认普通检索不再产出），两端边界对齐。
+- **SKILL.md 双语/长度合规整改（2026-09-01 追加，spec_lint ERROR 0）**：
+  - `summary` 重写为仅中文一句话（原 211 字符功能描述堆砌 → 60 字符）；`description` **英文部分重写**（精炼为：2×2 → PRR/ROR/IC/EBGM + 95% CI → 双核心交付物 HTML/XLSX + 可选佐证源；中文部分同步对齐 cdr-adr 的 optional 定位，原文把其写为基础数据源）。
+  - **正文中文段全部译为英文**（§Data Sources 表、§Architecture、§Blocked 原因列、§Errors）：对齐 ct-base §4「SKILL.md 正文一律英文（agent-facing）」。仅保留 4 处有意双语/示例中文（Language 导航标签、显式确认短语中英对照、`--drug 阿司匹林` 示例）。
+  - **`references/ADVANCED.md` 新建**（§16.1 外迁）：承载完整 Features 能力表、Blocked 完整证据表、thin-local-client 架构展开、双语检索发送策略、references 索引。SKILL.md 内各段保留精简版 + 单行指针。
+  - **行数 237 → 199**（F02 软上限消除）：压缩 Features（21→16）、Workflow、Errors、API Key、Regression Tests、Comparative（表转行内指针）、Pipeline、Requirements、Data Sources（3 个 corroborative 源合并 1 行）、§Planned（3 行→1 行）、Bug Reporting 等段；安全披露（Disclaimer / Data flow / ⚠️ Safety）一条未删。
+  - **CHANGELOG 双源合并（F13）**：原顶层 CHANGELOG 首条为 `[Unreleased]`、`references/CHANGELOG.md` 是完整副本 —— 规范（STANDARD_TOPLEVEL）要求顶层单份且首条=当前版本。已把 Unreleased 的 ct-literature 3 点并入 v0.9.8、删除 `references/CHANGELOG.md`、SKILL.md 指针改 `CHANGELOG.md`。
+  - 验证：`spec_lint --skill ct-safety` → **ERROR 0**，WARN 5（F17 ×4 出站调用归位 / F26 文件数，均为历史软上限、不阻断）。
+- **spec_lint 检查器判定修复（ct-base/scripts/spec_lint.py，家族共享）**：此前 F08/F19 对"中文成段但夹英文"的 SKILL.md **判定失效**（`_cjk_ratio` 被英文代码/表格稀释至 5.5%、F08 只查双语形态漏掉"超长中文描述"），导致语言规范长期漏检。新增 `_has_cjk_paragraph`（成段中文检测）+ `_summary_too_long`（>120 字符），F08/F19 级别 WARN→ERROR（未发布技能仍降级 INFO 不误伤）。全库 26 技能复跑无假阳性。
+
+## v0.9.7 (2026-09-01) · 佐证型安全性数据源（详见 references/changelog.md）
+
+- 新增 `corroborative_sources.py`（DailyMed SPL / RxClass MED-RT / openFDA Enforcement 三个免密钥公开源），产出 labeled/unlabeled 判定供 signal_score 分级；技术细节见 `references/changelog.md` 的 v0.9.7 条目。本地提交，未发布。
+
 ## v0.9.6 (2026-09-01) · CN-PV 可观测性 + 错源污染守卫（本地提交，未发布）
 
 缺陷级修复（两项，均由实测发现）：

@@ -62,7 +62,7 @@ class SourceResult:
         self.event_total = event_total
         self.grand_total = grand_total
         self.error = error
-        self.cached_at = cached_at or datetime.utcnow().isoformat()
+        self.cached_at = cached_at or datetime.now().isoformat(timespec='seconds')
 
     def to_2x2(self) -> Optional[Dict[str, int]]:
         """转为 2x2 表分量 {a, b, c, d}。"""
@@ -252,13 +252,18 @@ class EudraVigilanceSource(BaseSource):
 
         self._rate_limit()
 
-        # EMA 公开 API 暂不稳定，此处返回未接入状态
-        # 实际对接时需要：ADRreports EU API / EMA Medicines API
+        # 2026-09-01 本机实测结论（非推测）：
+        #   https://www.adrreports.eu/en/search_subst.html → HTTP 200，但页面仅为
+        #   BusinessObjects 报表框架；尝试 /en/data/substances.json → HTTP 404。
+        #   line-listing 数据由 BO 报表服务端渲染，无公开 JSON/CSV 端点，
+        #   免授权自动化不可行。若确需接入，只能走 EMA 官方数据申请流程。
         result = SourceResult(
             source=self.name,
             drug=drug,
             event=event,
-            error="未接入（需 EMA API 注册 + 授权；详见 https://www.adrreports.eu/）"
+            error=("未接入：ADRreports.eu 数据在 BusinessObjects 报表内，"
+                   "无公开 JSON 端点（substances.json→404，2026-09-01 实测）；"
+                   "需 EMA 官方数据申请授权")
         )
         return result
 
@@ -273,7 +278,8 @@ class VigiAccessSource(BaseSource):
     Opt-in only（--enable-vigiaccess）。
     """
 
-    BASE_URL = "https://www.vigaccess.org/"
+    # 原值误写为 vigaccess.org（漏 i），2026-09-01 修正
+    BASE_URL = "https://www.vigiaccess.org/"
 
     @property
     def name(self) -> str:
@@ -293,12 +299,16 @@ class VigiAccessSource(BaseSource):
 
         self._rate_limit()
 
-        # WHO VigiAccess 公开 API 需要进一步对接
+        # 2026-09-01 本机实测结论（非推测）：
+        #   https://www.vigiaccess.org/ → HTTP 200 但仅 757 字节，是纯 SPA 外壳；
+        #   审计其 JS bundle（app.68e7334f….js，199KB）未发现任何数据 API 端点，
+        #   仅含 who-umc.org / meddra.org 等外链。VigiBase 全量需 UMC 付费授权。
         result = SourceResult(
             source=self.name,
             drug=drug,
             event=event,
-            error="未接入（需 WHO-UMC API 对接；详见 https://www.vigaccess.org/）"
+            error=("未接入：VigiAccess 为纯 SPA，JS bundle 内无数据 API 端点"
+                   "（2026-09-01 实测）；VigiBase 全量需 WHO-UMC 付费授权")
         )
         return result
 
@@ -372,6 +382,49 @@ def _compute_ror(result: SourceResult) -> Optional[Dict]:
         "ci_high": round(ci_high, 4) if ci_high is not None else None,
         "signal": signal,
     }
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 计数型源可行性登记（2026-09-01 本机逐个实测，非推测）
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# 记录在此的目的：避免后续重复调研已确认不可行的源。每条都附实测证据。
+# 若外部条件变化（如 PMDA 取消验证码），需重新实测后更新本表。
+COUNT_SOURCE_FEASIBILITY: Dict[str, Dict[str, str]] = {
+    "faers": {
+        "status": "已接入",
+        "evidence": "openFDA drug/event.json 免密钥可用",
+    },
+    "pmda_jader": {
+        "status": "不可自动化",
+        "evidence": ("info.pmda.go.jp/fukusayoudb/CsvDownload.jsp 下载表单含 "
+                     "captchaText 验证码字段，POST 需人工过码。JADER 是除 FAERS "
+                     "外唯一免费全量个例数据，价值高但被验证码硬阻断。"),
+    },
+    "health_canada": {
+        "status": "本机不可达",
+        "evidence": ("health-products.canada.ca/api/medeffect/ 连续两次 "
+                     "ReadTimeout（60s）。API 本身存在，疑地域/网络阻断，"
+                     "可在境外出口或 Coze 侧复测。"),
+    },
+    "vaers": {
+        "status": "需协议",
+        "evidence": ("CDC WONDER D8 端点 GET → 403 Access Denied；"
+                     "需 POST XML 请求并接受数据使用协议。疫苗安全性目前空白。"),
+    },
+    "eudravigilance": {
+        "status": "需授权",
+        "evidence": "ADRreports.eu 数据在 BO 报表内，substances.json → 404",
+    },
+    "vigiaccess": {
+        "status": "无 API",
+        "evidence": "纯 SPA（757B），JS bundle 内无数据端点；VigiBase 需付费授权",
+    },
+    "mhra_idap": {
+        "status": "本机不可达",
+        "evidence": "info.mhra.gov.uk ConnectTimeout",
+    },
+}
 
 
 def compare_sources(drug: str, event: str,
@@ -448,7 +501,7 @@ def compare_sources(drug: str, event: str,
         "signal_count": signal_count,
         "consistency": consistency,
         "source_metrics": source_metrics,
-        "generated_at": datetime.utcnow().isoformat(),
+        "generated_at": datetime.now().isoformat(timespec='seconds'),
     }
 
     return summary
@@ -460,8 +513,10 @@ def compare_sources(drug: str, event: str,
 
 def main():
     p = argparse.ArgumentParser(description="多数据源信号验证框架")
-    p.add_argument("--drug", required=True, help="药物名（英文）")
-    p.add_argument("--event", required=True, help="不良事件（MedDRA PT 英文）")
+    # 注意：不设 required=True —— 否则 --list-feasibility 无法单独使用；
+    # 改为解析后按需校验。
+    p.add_argument("--drug", help="药物名（英文）")
+    p.add_argument("--event", help="不良事件（MedDRA PT 英文）")
     p.add_argument("--enable-eudravigilance", action="store_true",
                    help="启用 EMA EudraVigilance（opt-in）")
     p.add_argument("--enable-vigiaccess", action="store_true",
@@ -472,8 +527,18 @@ def main():
                    help="输出格式")
     p.add_argument("--output", type=str, default=None, help="输出文件路径")
     p.add_argument("--no-cache", action="store_true", help="禁用缓存")
+    p.add_argument("--list-feasibility", action="store_true",
+                   help="列出各计数型源的接入可行性与实测证据后退出")
 
     args = p.parse_args()
+
+    if args.list_feasibility:
+        print(json.dumps(COUNT_SOURCE_FEASIBILITY, ensure_ascii=False,
+                         indent=2))
+        return
+
+    if not args.drug or not args.event:
+        p.error("--drug 与 --event 为必填（除 --list-feasibility 外）")
 
     sources = None
     if args.sources:

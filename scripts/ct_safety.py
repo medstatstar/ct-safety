@@ -35,6 +35,36 @@ import signal_prioritizer
 import psur_generator
 
 
+# ── 轻本地端：默认外发 Coze；--offline 回退本机直连（2026-09-01）──────────────
+# 把 fetch_faers / fetch_fda_label 的「检索」调用重定向到 Coze 统一端点；
+# 本地计算（disproportionality / signal_score / check_event）与未外发的辅助检索
+# （query_total / fetch_case_reports / fetch_cn_pv 本机直连可达）保持本机直连。
+try:
+    _ADAPTERS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 os.pardir, "adapters")
+    if _ADAPTERS_DIR not in sys.path:
+        sys.path.insert(0, _ADAPTERS_DIR)
+    import coze_dispatch
+    _COZE_DISPATCH_OK = True
+except Exception as _e:  # pragma: no cover - 缺失则强制离线
+    coze_dispatch = None
+    _COZE_DISPATCH_OK = False
+    print("[WARN] coze_dispatch 不可用，强制本机直连: %s" % _e)
+
+_OFFLINE = "--offline" in sys.argv
+if _COZE_DISPATCH_OK:
+    coze_dispatch.set_mode(_OFFLINE)
+    if not _OFFLINE:
+        # rebind 模块全局名 → 薄垫片：调用点零改动，下游无感消费同构 JSON
+        fetch_faers = coze_dispatch.FaersShim(fetch_faers)
+        fetch_fda_label = coze_dispatch.FdaLabelShim(fetch_fda_label)
+        print("[ct_safety] 检索后端：Coze 统一端点 ct-search.coze.site/run（轻本地端）")
+    else:
+        print("[ct_safety] 检索后端：--offline 本机直连")
+else:
+    print("[ct_safety] 检索后端：本机直连（coze_dispatch 不可用）")
+
+
 def _render_top_events(data, drug, cn_pv=None):
     """Top-events-only report when no --event is supplied (no 2x2 disproportionality)."""
     drug_total = data.get("drug_total")
@@ -1149,6 +1179,8 @@ def main():
     ap.add_argument("--date-from", help="filter receivedate >= YYYYMMDD (e.g. 20200101)")
     ap.add_argument("--date-to", help="filter receivedate <= YYYYMMDD (e.g. 20261231)")
     ap.add_argument("--run", action="store_true")
+    ap.add_argument("--offline", action="store_true",
+                    help="（可选）本机直连检索，不走 Coze 统一端点；默认外发 Coze（轻本地端）")
     ap.add_argument("--out-dir", default="./out")
     # #6: continuity correction + control validation
     ap.add_argument("--no-continuity", action="store_true",

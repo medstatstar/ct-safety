@@ -26,21 +26,18 @@ PROTOCOL (consistent with the live ct-search.coze.site/run unified endpoint):
   - Outbound authorization gate (ct-base §5.212): endpoint must be present in
     adapters/config.json auto_approve_endpoints, else [AUTH-BLOCK] and exit.
 
-DEPLOYMENT STATUS (verified by live probe 2026-09-01, NOT an assumption):
-  The unified endpoint does **not** yet serve source "nmpa_pv". Worse, it does
-  not reject unknown sources either — it silently FALLS BACK to the default
-  source. Probing `nmpa_pv`, `chinadrugtrials`, and a deliberately bogus source
-  all returned byte-identical chinadrugtrials trial registrations (144 rows,
-  keys 登记号 / 试验状态 / 药物名称, plus `keyword_stats`).
-  Consequence: without a guard, this client would inject **clinical-trial
-  registrations into a drug-safety report as if they were NMPA ADR bulletins** —
-  a data-contamination-grade false positive, worse than a hard failure.
-  Therefore this module enforces a response-shape guard (see
-  `_reject_foreign_records`): records not shaped like NMPA bulletins are refused
-  with an explicit error instead of being merged into the report.
-  Until the workflow is actually uploaded, every `--run` returns
-  `error: NMPA_SOURCE_NOT_DEPLOYED` and hit_count=0. This is intentional: it is
-  a fail-closed default, and it must NOT be "fixed" by relaxing the guard.
+DEPLOYMENT STATUS (re-probed 2026-09-01, verified live — NOT an assumption):
+  The unified endpoint **now serves source "nmpa_pv"** and returns genuine
+  NMPA/CDR-ADR ADR bulletins. Live probe with drug=甲氨蝶呤 returned
+  hit_count=1 (通报专文: "药品不良反应信息通报（第75期）关注甲氨蝶呤片的误用风险"),
+  with the `tier` field present — i.e. the response-shape guard PASSED, no
+  contamination. The browser channel (Playwright on the Coze server) is exactly
+  what bypasses the NMPA-main-site WAF (HTTP 412) that blocks local direct fetch.
+  (Background, kept for context: before the workflow was uploaded, the endpoint
+  silently FELL BACK to the default chinadrugtrials source for unknown sources —
+  which is why `_reject_foreign_records` exists. That guard is STILL enforced;
+  it must never be relaxed, because a regressed/unknown source could re-introduce
+  the clinical-trial-into-safety-report contamination.)
 
 EGRESS: only PUBLIC query terms (drug / event keywords) are sent. No
 confidential data; PII patterns are stripped from the payload (ct-base §5.50).
@@ -129,6 +126,21 @@ def _query_origin():
     return hashlib.sha256(socket.gethostname().encode("utf-8")).hexdigest()[:32]
 
 
+def _billing_fields(account_id, billing_token):
+    """ct-base §20.12：计费身份标识透传（可选）。
+
+    仅当调用方显式提供才进入出站 payload；服务端未部署计费中间件时由
+    `extra='ignore'` 安全忽略（向后兼容、不阻断）。与 `query_origin` 匿名机器
+    指纹完全独立，不复用其字段。返回 {} 表示 legacy 未计量路径。
+    """
+    out = {}
+    if account_id and account_id.strip():
+        out["account_id"] = account_id.strip()
+    if billing_token and billing_token.strip():
+        out["billing_token"] = billing_token.strip()
+    return out
+
+
 # ── 错源污染守卫 / response-shape guard ────────────────────────────────────
 # 背景：统一端点对未知 source 不报错，而是静默 fallback 到默认源（实测 2026-09-01：
 # nmpa_pv / chinadrugtrials / 乱码源名返回完全一致的临床试验登记记录）。若不加守卫，
@@ -169,7 +181,8 @@ def _reject_foreign_records(records):
 
 
 def search_nmpa(drug_keywords, event_keywords=None, terms=None, max_pages=3,
-                run=False, out=None, timeout=300, token=None, endpoint=None):
+                run=False, out=None, timeout=300, token=None, endpoint=None,
+                account_id=None, billing_token=None):
     """检索 NMPA 通报（经 Coze 统一端点浏览器通道）。返回 result dict 或 None(preview)。
 
     契约（与 ct-registry 统一端点一致）：服务端同步返回全局状态 dict，
@@ -191,6 +204,9 @@ def search_nmpa(drug_keywords, event_keywords=None, terms=None, max_pages=3,
         "max_pages": max(1, int(max_pages)),
         "query_origin": _query_origin(),
     }
+    billing = _billing_fields(account_id, billing_token)
+    if billing:
+        payload.update(billing)
     if not run:
         print("[PREVIEW] nmpa-coze: no network request will be made. Add --run to execute.")
         print("[PREVIEW] Endpoint : %s" % endpoint)
@@ -322,12 +338,18 @@ def main():
     ap.add_argument("--timeout", type=int, default=300, help="poll timeout seconds")
     ap.add_argument("--token", help="override Bearer token (ct-base §5 resolution otherwise)")
     ap.add_argument("--endpoint", help="override endpoint URL")
+    ap.add_argument("--account-id", help="（可选）付费账户标识，透传至统一端点（ct-base §20.12 计费预留）")
+    ap.add_argument("--billing-token", help="（可选）服务端签发的计费令牌，透传至统一端点")
     args = ap.parse_args()
+
+    # 计费标识：CLI 优先，env (CT_BILLING_ACCOUNT_ID / CT_BILLING_TOKEN) 兜底
+    account_id = args.account_id or os.environ.get("CT_BILLING_ACCOUNT_ID")
+    billing_token = args.billing_token or os.environ.get("CT_BILLING_TOKEN")
 
     drug_kw = [k.strip() for k in args.drug.split(",") if k.strip()]
     res = search_nmpa(drug_kw, [args.event] if args.event else [], args.terms,
                       args.max_pages, args.run, args.out, args.timeout,
-                      args.token, args.endpoint)
+                      args.token, args.endpoint, account_id, billing_token)
     if res and not args.out:
         print(json.dumps(res, ensure_ascii=False, indent=2))
 

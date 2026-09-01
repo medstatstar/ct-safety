@@ -131,6 +131,13 @@ Just tell the assistant what you want in plain language. Below are real examples
 | Multi-drug adjusted ROR | aROR via `--compare-drugs` (focal vs pooled reference) | "Compare osimertinib vs gefitinib for pneumonitis" |
 | Multi-source triangulation + score | `--with-fda-label` → Safety Signal Score 0–100, T1–T4 | "Give me an overall signal score with evidence tier" |
 | Non-ASCII drug name | `--drug 阿司匹林` auto-resolves to INN | "查一下阿司匹林的不良反应" |
+| Published safety-literature corroboration | Chain to **`ct-literature --safety`** for the CSM / published-safety subset | "Pull published reviews on osimertinib pneumonitis to back this signal" |
+
+### Corroborating with published literature (chain to `ct-literature --safety`)
+
+When a FAERS signal needs *qualitative* backing from published evidence (reviews, pharmacovigilance papers), invoke **`ct-literature --safety`**. It returns the CSM qualitative subset as a separate **Safety-Related** sheet — useful to contextualize / corroborate a signal.
+
+> **Boundary (important).** `ct-literature --safety` is *published-literature context only* — it must **NOT** feed the FAERS 2×2 disproportionality table (doing so would distort the counts). Use it to corroborate and explain signals, never as a quantitative source. For structured signal statistics, stay within `ct-safety` (FAERS + label + CN-PV).
 
 ## FAQ
 
