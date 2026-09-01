@@ -26,9 +26,21 @@ PROTOCOL (consistent with the live ct-search.coze.site/run unified endpoint):
   - Outbound authorization gate (ct-base §5.212): endpoint must be present in
     adapters/config.json auto_approve_endpoints, else [AUTH-BLOCK] and exit.
 
-NOTE: source "nmpa_pv" is deployed on the unified endpoint (2026-08-31). If the
-endpoint ever returns "unknown source", the channel is wired correctly but the
-server-side source regressed — surface that verbatim instead of guessing.
+DEPLOYMENT STATUS (verified by live probe 2026-09-01, NOT an assumption):
+  The unified endpoint does **not** yet serve source "nmpa_pv". Worse, it does
+  not reject unknown sources either — it silently FALLS BACK to the default
+  source. Probing `nmpa_pv`, `chinadrugtrials`, and a deliberately bogus source
+  all returned byte-identical chinadrugtrials trial registrations (144 rows,
+  keys 登记号 / 试验状态 / 药物名称, plus `keyword_stats`).
+  Consequence: without a guard, this client would inject **clinical-trial
+  registrations into a drug-safety report as if they were NMPA ADR bulletins** —
+  a data-contamination-grade false positive, worse than a hard failure.
+  Therefore this module enforces a response-shape guard (see
+  `_reject_foreign_records`): records not shaped like NMPA bulletins are refused
+  with an explicit error instead of being merged into the report.
+  Until the workflow is actually uploaded, every `--run` returns
+  `error: NMPA_SOURCE_NOT_DEPLOYED` and hit_count=0. This is intentional: it is
+  a fail-closed default, and it must NOT be "fixed" by relaxing the guard.
 
 EGRESS: only PUBLIC query terms (drug / event keywords) are sent. No
 confidential data; PII patterns are stripped from the payload (ct-base §5.50).
@@ -115,6 +127,45 @@ def _sanitize(obj):
 
 def _query_origin():
     return hashlib.sha256(socket.gethostname().encode("utf-8")).hexdigest()[:32]
+
+
+# ── 错源污染守卫 / response-shape guard ────────────────────────────────────
+# 背景：统一端点对未知 source 不报错，而是静默 fallback 到默认源（实测 2026-09-01：
+# nmpa_pv / chinadrugtrials / 乱码源名返回完全一致的临床试验登记记录）。若不加守卫，
+# 临床试验登记会被当成 NMPA 不良反应通报灌进安全报告——数据污染级假阳性，比硬失败更危险。
+#
+# NMPA 节点（nmpa_search_node._filter_and_grade）保证输出的记录键集合：
+#     {title, url, date, source_column, snippet, matched_keywords, tier}
+# 临床试验源（chinadrugtrials / chictr 等）的记录键含：登记号 / 试验状态 / project_id …
+# 两者互斥，可据此确定性判定。
+_FOREIGN_KEYS = ("登记号", "试验状态", "project_id", "试验通俗题目", "适应症",
+                 "申办单位", "伦理委员会")
+
+
+def _reject_foreign_records(records):
+    """校验记录是否为 NMPA 通报形状。返回 (ok, reason)；ok=False 时必须拒绝合并。
+
+    判定规则（确定性、零网络、纯函数，符合 ct-base 反幻觉护栏原则）：
+      1. 任一条记录含临床试验特征键 → 错源污染；
+      2. 非空记录集里 tier 全缺 → 不是 nmpa_pv 节点的产物，同样视为污染。
+    """
+    if not records:
+        return True, ""
+    sample = records[:20]
+    for r in sample:
+        if not isinstance(r, dict):
+            return False, "record is not an object"
+        for k in _FOREIGN_KEYS:
+            if k in r:
+                return False, (
+                    "endpoint fell back to a non-NMPA source: records carry "
+                    "clinical-trial field %r (source nmpa_pv not deployed on the "
+                    "unified endpoint yet)" % k)
+    if not any(isinstance(r, dict) and r.get("tier") for r in sample):
+        return False, (
+            "endpoint returned records without the 'tier' field that the NMPA "
+            "node always emits — refusing to merge (unknown/degraded source)")
+    return True, ""
 
 
 def search_nmpa(drug_keywords, event_keywords=None, terms=None, max_pages=3,
@@ -214,6 +265,14 @@ def search_nmpa(drug_keywords, event_keywords=None, terms=None, max_pages=3,
         except Exception as e:
             return {"source": "NMPA via coze", "hit_count": 0, "hits": [],
                     "error": "project_list parse failed: %s" % e}
+
+    # 错源污染守卫：形状不符一律 fail-closed，绝不把临床试验登记并入安全报告
+    ok, reason = _reject_foreign_records(projects)
+    if not ok:
+        return {"source": "NMPA via coze", "hit_count": 0, "hits": [],
+                "tier_counts": {}, "query": payload,
+                "run_id": data.get("run_id"),
+                "error": "NMPA_SOURCE_NOT_DEPLOYED: %s" % reason}
 
     hits = []
     tier_counts = {}

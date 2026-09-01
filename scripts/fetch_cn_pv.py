@@ -164,6 +164,10 @@ def _get(session, url, timeout=25):
     last = None
     for attempt in (1, 2):
         r = session.get(url, timeout=timeout)
+        # 中文站若未在 Content-Type 声明 charset，requests 默认按 ISO-8859-1 解码 →
+        # 全篇中文乱码、命中率直接归零且无任何报错。此处强制嗅探真实编码兜底。
+        if not r.encoding or r.encoding.lower() in ("iso-8859-1", "latin-1"):
+            r.encoding = r.apparent_encoding or "utf-8"
         if r.status_code == 200:
             return r
         last = r
@@ -344,6 +348,23 @@ def _cache_save(path, key, result):
         print("[WARN] cache write failed: %s" % e)
 
 
+def _coverage_note(stats, total_columns):
+    """抓取覆盖率说明：让「0 命中」与「抓取失败」在报告层可区分。"""
+    parts = ["扫描 %d 篇 / %d 栏目" % (stats.get("scanned", 0), total_columns)]
+    if stats.get("failed_columns"):
+        names = "、".join(c["column"] for c in stats["failed_columns"])
+        parts.append("⚠️ %d 个栏目抓取失败（%s）——这些栏目未覆盖"
+                     % (len(stats["failed_columns"]), names))
+    if stats.get("failed_articles"):
+        parts.append("⚠️ %d 篇文章正文抓取失败" % stats["failed_articles"])
+    if stats.get("empty_columns"):
+        parts.append("%d 个栏目列表为空（%s）"
+                     % (len(stats["empty_columns"]), "、".join(stats["empty_columns"])))
+    if stats.get("skipped_window"):
+        parts.append("%d 条因日期窗被剔除" % stats["skipped_window"])
+    return "；".join(parts) + "。"
+
+
 def search(drug_zh, drug_en=None, event=None, terms=None, max_per=10,
            run=False, out=None, max_pages=1, since=None, until=None,
            use_cache=True):
@@ -396,19 +417,27 @@ def search(drug_zh, drug_en=None, event=None, terms=None, max_per=10,
         return True
 
     hits = []
-    stats = {"scanned": 0, "skipped_window": 0}
+    stats = {"scanned": 0, "skipped_window": 0,
+             "failed_columns": [], "failed_articles": 0,
+             "empty_columns": []}
     for col_name, col_path in COLUMNS:
         try:
             arts = list_articles(session, col_path, max_per, max_pages)
         except Exception as e:
+            # 栏目整体不可达：记入 stats（此前只 print，导致「抓取失败」与「真的 0 命中」不可区分）
             print("[WARN] column %s skipped: %s" % (col_name, e))
+            stats["failed_columns"].append(
+                {"column": col_name, "error": str(e)[:200]})
             continue
+        if not arts:
+            stats["empty_columns"].append(col_name)
         for art in arts:
             stats["scanned"] += 1
             try:
                 a = fetch_article(session, art)
             except Exception as e:
                 print("[WARN] article %s skipped: %s" % (art.get("url"), e))
+                stats["failed_articles"] += 1
                 continue
             text = (a["title"] + "\n" + a["body"])
             low = text.lower()
@@ -457,6 +486,10 @@ def search(drug_zh, drug_en=None, event=None, terms=None, max_per=10,
         "max_pages": max_pages,
         "since": since, "until": until,
         "stats": stats,
+        # degraded=True 表示抓取不完整（有栏目失败/有文章失败）→ 此时 0 命中
+        # 不可解读为"官方无相关通报"，报告层须显式提示。
+        "degraded": bool(stats["failed_columns"] or stats["failed_articles"]),
+        "coverage_note": _coverage_note(stats, len(COLUMNS)),
         "tier_counts": {t: sum(1 for h in hits if h.get("tier") == t)
                         for t in (TIER_BULLETIN, TIER_DATA_REPORT, TIER_MENTION)},
         "hit_count": len(hits),

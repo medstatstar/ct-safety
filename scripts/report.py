@@ -65,6 +65,15 @@ def render(res, cn_pv=None):
     lines.append("> 此为**定性叙事通报**，**非个案计数，不可做 disproportionality (PRR/ROR/IC) 分析**；"
                  "仅作上方 FAERS 量化信号的**定性佐证**。NMPA《药品不良反应信息通报》主站被 WAF 拦截，"
                  "本地不直连——如需覆盖可经 Coze 浏览器通道（`--with-nmpa-coze`）。")
+    # 抓取覆盖率：让「0 命中」与「抓取失败」可区分
+    # （此前栏目/文章失败只 print 到 stdout，JSON 与报告里完全看不出来 → 易被误读为"官方无通报"）
+    if cn_pv:
+        cov = cn_pv.get("coverage_note")
+        if cov:
+            lines.append("> 覆盖率 Coverage: %s" % cov)
+        if cn_pv.get("degraded"):
+            lines.append("> ⚠️ **本次抓取不完整**（存在栏目/文章失败）——结果**不代表官方通报全貌**；"
+                         "尤其 0 命中时不可解读为「官方无相关通报」，请重跑或检查网络后复核。")
     if cn_pv and cn_pv.get("hit_count"):
         hits = cn_pv["hits"]
         mc = cn_pv.get("max_per_column")

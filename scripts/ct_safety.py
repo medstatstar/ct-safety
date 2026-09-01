@@ -69,16 +69,31 @@ def _render_top_events(data, drug, cn_pv=None):
     # China official PV bulletins (qualitative corroboration only)
     lines.append("")
     lines.append("## 中国官方药物警戒通报 / China Official PV Bulletins (定性佐证 / Qualitative)\n")
+    # 覆盖率提示：与 report.py 主路径保持一致，避免「抓取失败」被读成「官方无通报」
+    if cn_pv:
+        cov = cn_pv.get("coverage_note")
+        if cov:
+            lines.append("> 覆盖率 Coverage: %s\n" % cov)
+        if cn_pv.get("degraded"):
+            lines.append("> ⚠️ **本次抓取不完整**（存在栏目/文章失败）——0 命中不可解读为「官方无相关通报」。\n")
     if cn_pv and cn_pv.get("hit_count"):
-        lines.append("命中 **%d** 条（最新抽样内）：\n" % cn_pv["hit_count"])
-        lines.append("| 日期 Date | 栏目 Column | 标题 Title | 链接 Link |")
-        lines.append("|---|---|---|---|")
+        lines.append("命中 **%d** 条（当前 `--cn-max-pages` 页 / `--cn-since` 日期窗内）：\n"
+                     % cn_pv["hit_count"])
+        tier_counts = cn_pv.get("tier_counts")
+        if tier_counts:
+            tier_disp = "、".join("%s %d" % (k, v) for k, v in tier_counts.items() if v)
+            if tier_disp:
+                lines.append("按佐证等级 / By evidence tier: %s\n" % tier_disp)
+        lines.append("| 佐证等级 Tier | 日期 Date | 栏目 Column | 标题 Title | 命中词 Kw | 链接 Link |")
+        lines.append("|---|---|---|---|---|---|")
         for h in cn_pv["hits"]:
             title = (h.get("title") or "").replace("|", "/")
-            lines.append("| %s | %s | %s | [原文](%s) |" % (
-                h.get("date") or "-", h.get("column", "-"), title, h.get("url", "")))
+            lines.append("| %s | %s | %s | %s | %s | [原文](%s) |" % (
+                h.get("tier") or "-", h.get("date") or "-", h.get("column", "-"),
+                title, ", ".join(h.get("matched_keywords", [])), h.get("url", "")))
     else:
-        lines.append("未命中中国官方通报（最新页抽样检索）。如需更广覆盖，可增大 `--cn-max`，"
+        lines.append("未命中中国官方通报（当前 `--cn-max-pages` 页 / `--cn-since` 日期窗内）。"
+                     "如需更广覆盖，可增大 `--cn-max-pages`、放宽 `--cn-since`，"
                      "或显式传入中文事件词 `--event-cn`。")
     return "\n".join(lines)
 

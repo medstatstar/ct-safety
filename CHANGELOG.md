@@ -1,5 +1,31 @@
 # Changelog — ct-safety
 
+## v0.9.6 (2026-09-01) · CN-PV 可观测性 + 错源污染守卫（本地提交，未发布）
+
+缺陷级修复（两项，均由实测发现）：
+
+1. **错源污染守卫（fail-closed）** — 实测统一端点对未知 source **不报错、静默 fallback**
+   到默认源：`nmpa_pv` / `chinadrugtrials` / 乱码源名返回完全一致的临床试验登记
+   （144 条，键含 `登记号`/`试验状态`/`project_id`）。若无守卫，临床试验登记会被当作
+   NMPA 不良反应通报并入安全报告——**数据污染级假阳性**，比硬失败更危险。
+   - `adapters/nmpa_coze.py` 新增 `_reject_foreign_records()`：按记录键形状确定性判定
+     （含临床试验特征键、或缺 `tier` 字段 → 拒绝），返回 `NMPA_SOURCE_NOT_DEPLOYED`。
+   - 真实验证：调用 `--with-nmpa-coze` 后 144 条污染记录被拦截，`hit_count=0`，未并入报告。
+   - 修正 v0.9.5 的错误陈述：docstring 原写 "nmpa_pv is deployed"（未核实），改为如实标注
+     「未部署 + fallback 风险 + 守卫为 fail-closed，不得靠放宽守卫来'修'」。
+
+2. **0 命中与抓取失败可区分** — 此前栏目/文章抓取失败只 `print` 到 stdout，JSON 与报告里
+   完全看不出，0 命中会被误读为「官方无相关通报」。
+   - `fetch_cn_pv.py`：`stats` 增加 `failed_columns` / `failed_articles` / `empty_columns`，
+     结果增加 `degraded` 与 `coverage_note`。
+   - `report.py` 与 `ct_safety.py::_render_top_events`（top-events 路径，此前仍是旧文案、
+     无 tier 列）均显示覆盖率行；`degraded=True` 时显式警告「不可解读为官方无通报」。
+
+其他：
+- `fetch_cn_pv.py` 编码兜底：无 charset 声明时强制嗅探（`requests` 默认 ISO-8859-1 会让
+  中文全篇乱码、命中率静默归零）。
+- `ct_safety.py::_render_top_events` 的 CN-PV 表补齐 tier 列与命中词，文案与 report.py 对齐。
+
 ## v0.9.5 (2026-08-31) · nmpa_coze.py 契约对齐统一端点（本地提交，未发布）
 - `adapters/nmpa_coze.py` 客户端契约对齐 ct-registry 统一端点真实返回：
   - 发出 payload 改为 `{source:nmpa_pv, mode:search, keyword:<药名>, multi_keywords:<事件词空格分隔>, max_pages, query_origin}`（去掉旧 `drug/event/records` 形态）。
