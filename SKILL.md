@@ -3,7 +3,7 @@ slug: ct-safety
 displayName: Clinical Trial Safety Signal / 临床试验安全信号专家
 name: ct-safety
 cn_name: 临床试验安全信号专家
-version: 0.9.9
+version: 0.9.10
 invocable: true
 required_commands: [python]
 summary: "基于 FDA FAERS 筛查药物-事件安全信号，计算 disproportionality（PRR / ROR / IC / EBGM，含 95% CI）与安全信号评分（0–100，T1–T4）。数据源：FDA FAERS（openFDA drug/event.json）、FDA 标签（drug/label.json）、中国 NMPA 药物警戒通报（cdr-adr.org.cn）、DailyMed 说明书、RxClass MED-RT、openFDA 召回执法、香港 ADR 警报。仅公开数据，零保密输入。"
