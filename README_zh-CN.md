@@ -6,7 +6,7 @@
   <img src="assets/icon.svg" width="240" height="240" alt="ct-safety 图标"/>
 </div>
 
-> 一个默认安全的药物警戒技能：对 **FDA FAERS** 公开不良事件数据筛查药物-事件安全信号（PRR / ROR / IC / EBGM，含 95% 置信区间），并可选叠加中国官方药物警戒通报作佐证。仅读取公开数据——**零保密输入（A 档，`network=public-retrieval`）**。
+> 一个默认安全的药物警戒技能：对 **FDA FAERS** 公开不良事件数据筛查药物-事件安全信号（PRR / ROR / IC / EBGM，含 95% 置信区间），并可选叠加中国官方药物警戒通报作佐证。仅读取公开数据——**零保密输入（A 档，`network=public-retrieval`）**。自 v0.9.9 起，所有检索采用**薄本地端**架构：本地仅做计算（disproportionality / 信号评分），所有出站检索统一经 Coze 端点 `ct-search.coze.site` 外发。
 
 ## 适用人群
 
@@ -18,23 +18,22 @@
 
 ## 耗时与检索量提示
 
-> ⚠️ **耗时与下载量上限**。本技能需联网检索 openFDA，耗时随你拉取的个案报告条数增长。以下为 **2026-08-31 实测**（药物 `candesartan`，匹配报告 53,248 条，匿名免 key 配额，上海 / 约 200 Mbps）：
+> ⚠️ **耗时与下载量上限**。自 v0.9.9 起，所有检索经 Coze 统一端点 `ct-search.coze.site` 外发（薄本地端架构）。耗时取决于 Coze 端处理 + 网络。以下为 **2026-09-08 实测**（上海 / 约 200 Mbps，Coze 端点）：
 >
 > | 负载 | 命令形态 | 实测 wall-clock | 产出 |
 > |---|---|---|---|
-> | **概览**（count-facet 快取，默认路径） | `ct_safety.py --drug candesartan --run`（不给 `--event`） | **6 秒** | 匹配 53,248 条，top-10 反应 |
-> | **信号检测 + 100 条个案** | `ct_safety.py --drug candesartan --event NAUSEA --case-level 100 --run` | **57 秒** | 100 条个案 |
-> | **批量下载** | `fetch_reports.py --drug candesartan --max 500 --run` | **311 秒**（5 页，约 62 秒 / 每 100 条页） | 500 条原始报告 |
-> | **满上限外推值** | `--max 10000` = 100 页 | **约 103 分钟**（按上表 62 秒/页外推，**非直接实测**） | 10,000 条原始报告 |
+> | **概览**（count-facet，默认路径） | `ct_safety.py --drug candesartan --run`（不给 `--event`） | **约 10–30 秒** | 匹配报告数，top-10 反应 |
+> | **信号检测** | `ct_safety.py --drug candesartan --event NAUSEA --run` | **约 15–45 秒** | 2×2 表 + PRR/ROR/IC/EBGM |
+> | **叠加中国 PV 佐证** | `ct_safety.py --drug osimertinib --event PNEUMONITIS --with-cn-pv --drug-cn 奥希替尼 --event-cn 肺炎 --run` | **约 20–60 秒** | FAERS 信号 + 中国通报 |
 >
 > **单次运行上限（与实现参数一致）**：
 > - `fetch_reports.py --max <n>` → 硬上限 **10,000**（`HARD_CAP`）；超出自动 clamp 并打印 `[WARN]`。
 > - `ct_safety.py --case-level <n>` → **单页**抓取，硬上限 **100**；超出自动截断并打印 `[WARN]`。且**必须配合 `--event`** 使用（否则被忽略）。批量下载请改用 `fetch_reports.py --max`。
-> - openFDA 配额：匿名 240 次/分、1,000 次/天按 IP；免费 key 240 次/分、120,000 次/天按 key。单次请求超时 120 秒。
+> - openFDA 配额（仅本机直连的 `query_total` / `fetch_case_reports`）：匿名 240 次/分、1,000 次/天按 IP；免费 key 240 次/分、120,000 次/天按 key。单次请求超时 120 秒。
 >
-> **触顶 / 超时行为**：超出上限**不报错**——自动截断到上限、打印 `[WARN] ... clamped/truncated` 并返回部分结果。配额耗尽返回 HTTP **429**，需加 `--api-key` 或降低请求频率。单页超时重试 3 次后报错。
+> **触顶 / 超时行为**：超出上限**不报错**——自动截断到上限、打印 `[WARN] ... clamped/truncated` 并返回部分结果。Coze 端配额耗尽返回结构化错误，需加 `--api-key` 或降低请求频率。单页超时重试 3 次后报错。
 >
-> **如何避免长时间等待**：先用秒级概览摸清基数再决定是否下载个案；用 `--date-from` / `--date-to` 缩小时间窗；`--max` 由小到大逐步加（500 → 2000 → …）；申请免费 openFDA key 提升日配额。
+> **如何避免长时间等待**：先用概览摸清基数再决定是否下载个案；用 `--date-from` / `--date-to` 缩小时间窗；`--max` 由小到大逐步加（500 → 2000 → …）。
 
 ## 如何在对话里使用
 
@@ -106,16 +105,16 @@
 **如何触发真实计算：**
 > 分支理清意图后，同样的两段式适用：概览自动跑，详情等你确认（或「跳过预览，直接跑」立即执行）。
 
-### 示例 6 · 强制真跑
+### 示例 6 · 带证据分级的综合信号评分
 
 **你这样说：**
-> 跳过预览，直接跑——candesartan 血管性水肿的信号检测，现在开始。
+> 给我一个奥希替尼肺炎的安全信号评分，带证据分级——把 FDA 标签和中国 PV 也拉上。
 
 **助手会这样回（示意）：**
-> 收到。现在执行详细 FAERS 检索与 disproportionality 分析，并返回 JSON / Markdown 报告。
+> 我会跑完整的三角验证：FAERS disproportionality（PRR/ROR/IC/EBGM）+ FDA 标签的 labeled-vs-unlabeled 判定 + 中国官方药物警戒通报，最终合成安全信号评分（0–100）与 T1–T4 证据分级。
 
 **如何触发真实计算：**
-> 「跳过预览，直接跑」是**显式确认的一种说法**：告诉技能概览已足够、现在就要详情步骤。它是**确认，不是绕过**——Step 2 的安全约束同样生效；顺口一提的普通话语不会被当作同意。
+> 这是最完整的路径——确认详情步骤（或「跳过预览，直接跑」），技能即查询全部三个源，对信号打分并定级。评分与分级写入 HTML/XLSX 报告。
 
 ## 你能做些什么 —— 场景索引
 
@@ -154,7 +153,7 @@
 是。技能跟随你的输入语言：`zh-*` 区域下提示与报告切中文，其余切英文。代码注释与文档仅英文。
 
 **openFDA key 怎么配？**
-默认**无需 key** 即可运行（匿名 240 次/分、1,000 次/天，按 IP）。仅高吞吐场景才需免费 key，到 https://open.fda.gov/api/register/ 邮箱即注册（无信用卡）。用以下三种自配置方式之一提供：
+默认**无需 key** 即可运行（主路径经 Coze 统一端点）。仅本机直连的 `query_total` / `fetch_case_reports` 走 openFDA（匿名 240 次/分、1,000 次/天，按 IP）。仅高吞吐场景才需免费 key，到 https://open.fda.gov/api/register/ 邮箱即注册（无信用卡）。用以下三种自配置方式之一提供：
 - 环境变量：`export OPENFDA_API_KEY=YOUR_KEY`（推荐，每个脚本自动读取）；
 - 技能根目录 `.env` 文件：`OPENFDA_API_KEY=YOUR_KEY`（已 git-ignore，不会随包发布）；
 - 命令行：`--api-key YOUR_KEY`。
@@ -174,12 +173,12 @@ A: 本技能遵循 ct-base §20.3 错误报告流程。若您怀疑结果有误�
 
 **两段式流程，默认安全。** 第一步（概览：总数 + Top-N）自动执行。第二步（详细检索 / 信号检测）**仅在你显式确认后**才执行——或当你说「跳过预览，直接跑」时。在确认前不会触发任何大批量下载，随口一问也不会跑重计算。
 
-**出站披露。** 技能仅读取公开源：
-- **FDA FAERS** 经 openFDA `https://api.fda.gov/drug/event.json`（必需，量化）；
-- **FDA Label** 经 openFDA `drug/label.json`（使用 `--with-fda-label` 时的可选第三源）；
-- **国家药品不良反应监测中心** `cdr-adr.org.cn` 公开栏目（使用 `--with-cn-pv` 时的可选源，仅定性佐证——叙事通报、无个案计数，绝不进入 disproportionality）。
+**出站披露。** 自 v0.9.9 起，技能采用**薄本地端**架构：本地仅做计算（disproportionality / 信号评分 / labeled 判定），所有出站检索统一经 Coze 端点 `ct-search.coze.site` 外发。技能仅读取公开源：
+- **FDA FAERS**（必需，量化）—— 经 Coze `faers` 节点检索；
+- **FDA Label**（使用 `--with-fda-label` 时的可选第三源）—— 经 Coze `fda_label` 节点检索；
+- **国家药品不良反应监测中心** `cdr-adr.org.cn`（使用 `--with-cn-pv` 时的可选源，仅定性佐证）—— 经 Coze `nmpa_pv` 节点检索。
 
-**零保密数据或信息输入**（A 档：普通数据输入 + 对外检索，`network=public-retrieval`）。NMPA 主站被 WAF 拦截（HTTP 412），已刻意排除。你的 openFDA key（若使用）**仅本地存储**，且**仅经 HTTPS 发往官方 openFDA API**。
+**零保密数据或信息输入**（A 档：普通数据输入 + 对外检索，`network=public-retrieval`）。NMPA 主站被 WAF 拦截（HTTP 412），已刻意排除。你的 openFDA key（若用于本机直连的 `query_total` / `fetch_case_reports`）**仅本地存储**，且**仅经 HTTPS 发往官方 openFDA API**。
 
 信号检测仅供筛查，非因果结论；监管提交（DSUR / PBRER / 标签变更）须另行按 GCP / ICH E2 评估。
 
@@ -191,9 +190,9 @@ A: 本技能遵循 ct-base §20.3 错误报告流程。若您怀疑结果有误�
 
 | 源 | 访问方式 | 状态 |
 |---|---|---|
-| FDA FAERS（openFDA `drug/event.json`） | 官方公开 REST API，直连，低频无需 key | 必需（A 档，量化） |
-| FDA Label（openFDA `drug/label.json`） | 同 openFDA，无需 key；`adverse_reactions` / `warnings` | 可选 `--with-fda-label`（标签内/外风险） |
-| 国家不良反应监测中心（cdr-adr.org.cn） | 公开栏目抓取（药物警戒快讯 / 数据报告 / 通知通告 / 器械·化妆品警戒快讯）；无 WAF、无需 key | 可选 `--with-cn-pv`（仅定性佐证） |
+| FDA FAERS（openFDA `drug/event.json`） | 薄本地端 → Coze 统一端点 `ct-search.coze.site`（`faers` 节点）；`query_total` / `fetch_case_reports` 仍本机直连 | 必需（A 档，量化） |
+| FDA Label（openFDA `drug/label.json`） | 薄本地端 → Coze 端点（`fda_label` 节点）；`check_event` 本地判定 | 可选 `--with-fda-label`（标签内/外风险） |
+| 国家不良反应监测中心（cdr-adr.org.cn） | 薄本地端 → Coze 端点（`nmpa_pv` 节点）；本地保留关键词扩展 + 证据分级 + 缓存 | 可选 `--with-cn-pv`（仅定性佐证） |
 
 ### 环境要求
 
@@ -255,13 +254,13 @@ python scripts/fetch_cn_pv.py --drug "奥希替尼" --event-cn "肝损伤" --run
 
 | 错误 | 原因 | 修复 |
 |---|---|---|
-| `URLError` / timeout | 无网络 / 代理 | 确认 `api.fda.gov` 可达；配置代理 |
-| HTTP 429 / 限流 | 超 openFDA 限额（按请求次数，非按条数）：匿名 240/分、1,000/天按 IP；免费 key 240/分、120,000/天按 key | 加 `--api-key`；或降频 |
+| `URLError` / timeout | 无网络 / 代理 | 确认网络可达；配置代理 |
+| Coze 端点错误 | Coze 端配额耗尽 / token 无效 / 端点未 allow-list | 检查 Coze 部署状态及 `config.json` `auto_approve_endpoints` |
+| HTTP 429 / 限流 | 超 openFDA 限额（仅本机直连 `query_total` / `fetch_case_reports`） | 加 `--api-key`；或降频 |
 | 只给 `--drug` 未给 `--event` | 意图是看高发反应而非 2×2 信号 | 自动降级为 Top-N 报告；加 `--event <PT>` 算信号 |
 | 字段名不匹配 | 药名字段错 | 默认 `patient.drug.medicinalproduct`；用 `--field patient.drug.openfda.substance_name` 标准化 |
-| CN-PV HTTP 412 / WAF | nmpa.gov.cn 被拦截 | 预期内——仅抓 cdr-adr.org.cn；NMPA 已排除 |
 | CN-PV 0 命中 | 关键词过窄 | 传 `--drug-cn` + `--event-cn`；调大 `--cn-max` |
-| 多词事件持续 404 | 该三词 PT 未被索引 | 换标准 MedDRA PT |
+| 多词事件持续 404 | 该三词 PT 未被索引（本机直连路径） | 换标准 MedDRA PT |
 | `--max > 10000` | 突破免费配额上限 | 自动 clamp 到 `HARD_CAP=10000`；注意选择偏倚（API 返回顺序，非随机） |
 
 ### 比较研究设计模式（多药 / 单 SOC）
@@ -276,7 +275,7 @@ python tests/run_tests.py --live     # 额外跑 tests/test_live.py（真实 ope
 CT_SAFETY_LIVE=1 python tests/run_tests.py
 ```
 
-**版本**：v0.1.28 | **许可证**：MIT | **作者**：medstatstar, phoe-zip
+**版本**：v0.9.9 | **许可证**：MIT | **作者**：medstatstar, phoe-zip
 
 如有功能改进建议、Bug 报告或其他反馈，欢迎直接联系作者：medstatstar@gmail.com（张文彤 / Wintone Zhang）。
 

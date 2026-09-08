@@ -180,6 +180,4 @@ python scripts/fetch_cn_pv.py --drug "奥希替尼" --event-cn "肝损伤" --run
 ```
 
 ### Non-ASCII drug-name auto-translation
-`--drug 阿司匹林` auto-translates to `aspirin` via `drug_name_resolver` (CLI
-confirmation menu); 471-entry Chinese→English INN map in
-`references/drug_name_map.json`. Disable with `--no-resolve-drug-name`.
+`--drug 阿司匹林` auto-translates to `aspirin` via `drug_name_resolver.resolve_for_dialog()` (dialog-safe, no menu, aligns with ct-base §6.2 Triage); 471-entry Chinese→English INN map in `references/drug_name_map.json`. CLI-only `resolve(auto=False)` retains the multi-candidate number menu for terminal use. Disable with `--no-resolve-drug-name`.

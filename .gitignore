@@ -39,6 +39,9 @@ tests/**
 # ── publish_inject 注入标记，不进发布包 ──
 .ctbase_injected.json
 
+# ── Coze 端接口契约（cn_pv payload 契约，含 ct-search.coze.site 端点 URL）──
+references/cn_pv_contract.md
+
 # ── ct-base 统一基线（§16.7 / §16.8，2026-08-29 全库回填）──
 *.pyo
 outputs/

@@ -1,48 +1,39 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-coze_dispatch.py — ct-safety 轻本地端统一外发调度器（薄客户端）
+coze_dispatch.py — ct-safety 轻本地端统一外发调度器（薄客户端 · 流式版）
 
 WHY THIS EXISTS
 ───────────────
 用户指令（2026-09-01）：「统一采用轻本地端的策略，本地所有的 safety 检索需求
 一律改为外发 coze 实现。」本模块是这条指令的本地落地：
 
-  - 默认（非 --offline）：所有安全性「检索」动作经 Coze 统一端点
-    ct-search.coze.site/run 外发，由服务端直连各公共 API（FAERS / FDA Label /
-    DailyMed / RxClass / openFDA 召回 / 香港 ADR），仅回传**结构化结果**。
+  - 所有安全性「检索」动作经 Coze 统一端点外发，默认走 `/stream_run`（SSE 流式），
+    避免长检索被网关按单响应超时掐断；stream 无结果时自动回退 `/run`（非流式）。
   - 本地仅负责 disproportionality / signal_score / check_event（labeled 判定）/
-    报告生成等计算，以及 --offline 时的本机直连兜底。
+    报告生成等计算。
   - 出站凭据 / 授权闸门 / PII 剥离 / 计费透传 **复用 nmpa_coze 单一真相源**，
     不重复实现 token 解码与 config 校验。
 
-出站契约（与 ct-registry/adapters/coze 端一致）
-──────────────────────────────────────────────────
-  POST JSON {"source","mode":"search","keyword":<drug>,
-             "multi_keywords":<event 词>", "date_from?","date_to?",
-             "query_origin":<sha256(hostname)>, <billing?>}
-  → 同步返回全局状态 dict，data["project_list"] 是 JSON 字符串，其内容即对应
-    本地模块的输出结构（faers_counts / fda_label / Evidence.to_dict …）。
-    因此本地 dispatcher 对下游计算代码**完全无感**。
+架构规范：ct-base/BASE.md §20.14 — 词表留本地，抓取执行器上 Coze，长任务走流式。
 
 覆盖的 Coze source（与 ct-registry sources.py 注册一一对应）
-────────────────────────────────────────────────────
-  faers / fda_label / dailymed / rxclass / fda_recall / hk_pv
-（nmpa_pv 已由 nmpa_coze.search_nmpa 单独处理，仍走同一端点；
- fetch_cn_pv/cdr-adr.org.cn 本机直连即可达、无 WAF 阻断、Coze 端对该 CN 域
- 可达性未验证，故刻意保留本机直连，不在此外发。）
+──────────────────────────────────────────────────────
+  faers / fda_label / dailymed / rxclass / fda_recall / hk_pv / nmpa_pv
+（nmpa_pv 对应 NMPA 药物警戒通报检索，走 Coze 浏览器通道。）
 
-文档化例外（仍本机直连，不外发）
-────────────────────────────────
-  - fetch_faers.query_total / fetch_case_reports：需原样 openFDA 任意检索式 /
-    个案报告，结构化 state 无法承载，且 openFDA 直连不被 WAF 阻断；保留本机直连。
-  - fetch_fda_label.check_event：纯本地判定（labeled/unlabeled），无网络。
-  - fetch_faers._date_clause：纯函数，无网络。
+端点（与 ct-literature 对齐）
+──────────────────────────────
+  主路径：ct-search.coze.site/stream_run（SSE 流式）
+  回退：  ct-search.coze.site/run（非流式）
 """
 import json
 import os
 import sys
 import time
+import threading
+import urllib.error
+import urllib.request
 
 # 复用 nmpa_coze 的凭据/授权/PII/计费单一真相源（同目录）
 from nmpa_coze import (
@@ -51,6 +42,7 @@ from nmpa_coze import (
     _sanitize,
     _query_origin,
     _billing_fields,
+    attach_coze_contract,
     DEFAULT_ENDPOINT,
 )
 
@@ -63,7 +55,7 @@ try:
     if _SCRIPTS_DIR not in sys.path:
         sys.path.insert(0, _SCRIPTS_DIR)
     from drug_name_resolver import is_non_ascii as _dnr_is_non_ascii, \
-        resolve as _dnr_resolve
+        resolve_for_dialog as _dnr_resolve
 except Exception:  # pragma: no cover — resolver 缺失时降级为原样外发
     _dnr_is_non_ascii = None
     _dnr_resolve = None
@@ -80,30 +72,48 @@ except Exception:  # pragma: no cover — 缺失时降级为原样外发
 
 # 可由本调度器外发的源（fail-closed：不在表内一律拒绝）
 DISPATCHABLE_SOURCES = frozenset({
-    "faers", "fda_label", "dailymed", "rxclass", "fda_recall", "hk_pv",
+    "faers", "fda_label", "dailymed", "rxclass", "fda_recall", "hk_pv", "nmpa_pv",
 })
 
 # 这些源返回「佐证型 Evidence」结构（dailymed/rxclass/fda_recall）；
 # 出错时也回传同构 error 载体，便于 corroborative_sources.collect() 无感消费。
 _EVIDENCE_SOURCES = frozenset({"dailymed", "rxclass", "fda_recall"})
 
-# 后端模式：False=外发 Coze（默认），True=本机直连兜底。由调用方 set_mode() 设置。
-OFFLINE = False
+# 端点常量（与 ct-literature 对齐）
+CT_SEARCH_ENDPOINT_STREAM = os.environ.get("CT_SEARCH_ENDPOINT_STREAM",
+                                            "https://ct-search.coze.site/stream_run")
+CT_SEARCH_ENDPOINT = os.environ.get("CT_SEARCH_ENDPOINT",
+                                     "https://ct-search.coze.site/run")
+
+# 并发限流（ct-base §20.10）：相邻两次 Coze 调用间隔 ≥1 秒
+_RATE_LIMIT_LOCK = threading.Lock()
+_LAST_CALL_TS = 0.0
 
 
-def set_mode(offline: bool) -> None:
-    """设置后端模式。offline=True → 本机直连；False（默认）→ 外发 Coze。"""
-    global OFFLINE
-    OFFLINE = bool(offline)
+def _acquire_rate_limit():
+    """相邻两次 Coze 调用之间至少间隔 1 秒（可由 COZE_MIN_INTERVAL 覆写）。"""
+    try:
+        interval = float(os.environ.get("COZE_MIN_INTERVAL", "1.0"))
+    except (TypeError, ValueError):
+        interval = 1.0
+    if interval <= 0:
+        return
+    global _LAST_CALL_TS
+    with _RATE_LIMIT_LOCK:
+        now = time.monotonic()
+        wait = interval - (now - _LAST_CALL_TS)
+        if wait > 0:
+            time.sleep(wait)
+            now = time.monotonic()
+        _LAST_CALL_TS = now
 
 
 def _translate_drug(drug):
     """非 ASCII（中文）药名 → 英文 INN（来自 ct-base 共享 drug_name_map）。
 
     返回 (send_keyword, translated: bool)。英文 / 空 / 未命中映射时原样返回。
-    仅在 dispatch() 调用，故只作用于 6 个英文源（faers / fda_label / dailymed /
-    rxclass / fda_recall / hk_pv）；nmpa_pv 走 nmpa_coze.search_nmpa，不经过本函数，
-    中文药名不受影响（openFDA 等仅认英文 INN，中文名直发会 400）。
+    仅在 dispatch() 调用，故只作用于英文源（faers / fda_label / dailymed /
+    rxclass / fda_recall / hk_pv）；nmpa_pv 走中文关键词，不经此函数。
     """
     if not drug or _dnr_is_non_ascii is None or not _dnr_is_non_ascii(drug):
         return drug, False
@@ -118,7 +128,7 @@ def _translate_event(event):
 
     返回 (send_event, translated: bool)。英文 / 空 / 未命中映射且在线兜底也失败时原样返回。
     对齐 bilingual_retrieval.md §2：翻译前置，表内没有的词外接翻译 API 兜底。
-    事件词整短语保留（不截断），供 Coze 端整短语文引用（修 faers_node 首词截断 bug 的前提）。
+    事件词整短语保留（不截断），供 Coze 端整短语文引用。
     """
     if not event or _kwl_detect_lang is None or _kwl_detect_lang(event) != "zh":
         return event, False
@@ -142,43 +152,176 @@ def _generic_error(source, err):
     return {"error": err, "source": source}
 
 
+# ── SSE 流式解析器（复用 ct-literature pdf_download._parse_coze_stream）────────
+def _parse_stream(resp):
+    """解析 Coze stream_run 的 SSE 流，提取检索结果 projects 列表。
+
+    优先复用 scripts/pdf_download.py 的 _parse_coze_stream（PDF 通道已验证的同源实现）；
+    导入异常时降级到本模块内置最小解析器。返回 projects(list[dict]) 或 None。
+    """
+    try:
+        # 延迟导入：pdf_download 可能在某些环境下不可用
+        _skill_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if _skill_root not in sys.path:
+            sys.path.insert(0, _skill_root)
+        from adapters.pdf_download import _parse_coze_stream
+        return _parse_coze_stream(resp, lambda msg: None)
+    except Exception:
+        return _parse_stream_local(resp)
+
+
+def _parse_stream_local(resp):
+    """最小 SSE 解析兜底（仅当无法复用 pdf_download 时启用）。"""
+    events = []
+    buf = b""
+    for chunk in resp:
+        buf += chunk
+        while b"\n" in buf:
+            line_b, buf = buf.split(b"\n", 1)
+            line = line_b.decode("utf-8", "ignore").rstrip("\r")
+            if line.startswith("data:"):
+                ds = line[len("data:"):].lstrip()
+                if ds and ds != "[DONE]":
+                    try:
+                        events.append(json.loads(ds))
+                    except Exception:
+                        pass
+    if not events:
+        try:
+            events.append(json.loads(buf.decode("utf-8", "ignore")))
+        except Exception:
+            return None
+    final = None
+    for evt in events:
+        if not isinstance(evt, dict):
+            continue
+        inner = evt.get("data")
+        node = inner if (isinstance(inner, dict) and inner.get("type")) else evt
+        etype = node.get("type") or evt.get("type")
+        if etype == "workflow_end":
+            out = node.get("output")
+            if out is None and isinstance(node.get("data"), dict):
+                out = node["data"].get("output")
+            if out is not None:
+                final = out
+    if final is None:
+        for evt in reversed(events):
+            if isinstance(evt, dict) and ("projects" in evt or "project_list" in evt):
+                final = evt
+                break
+    if final is None:
+        return None
+    if isinstance(final, str):
+        try:
+            final = json.loads(final)
+        except Exception:
+            return None
+    if not isinstance(final, dict):
+        return None
+    projects = final.get("projects")
+    if isinstance(projects, list):
+        return projects
+    pl = final.get("project_list")
+    if pl is not None:
+        if isinstance(pl, str):
+            try:
+                pl = json.loads(pl)
+            except Exception:
+                return None
+        if isinstance(pl, dict):
+            p = pl.get("projects")
+            if isinstance(p, list):
+                return p
+    return None
+
+
+def _coze_stream_once(body, timeout):
+    """单次 /stream_run 请求 + SSE 解析；返回 projects(list) 或 None（无结果/被拒），异常上抛。"""
+    req = urllib.request.Request(CT_SEARCH_ENDPOINT_STREAM, data=body,
+                                 headers=_stream_headers(), method="POST")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return _parse_stream(resp)
+
+
+def _stream_headers():
+    """流式请求 headers（与 ct-literature 一致）。"""
+    h = {"Content-Type": "application/json"}
+    tok = get_token()
+    if tok:
+        h["Authorization"] = "Bearer " + tok
+    return h
+
+
+# ── 统一外发检索 ──────────────────────────────────────────────────────────
 def dispatch(source, drug, event=None, date_from=None, date_to=None,
              run=False, out=None, timeout=300, token=None, endpoint=None,
              account_id=None, billing_token=None, extra=None):
     """统一外发检索。返回解析后的 result dict（与本地模块同构）；run=False 仅预览。
 
+    主路径 /stream_run（SSE 流式），回退 /run（非流式）。
     `out` 非空时把结果写盘，兼容 ct_safety.py 既有 `json.load(open(out))` 往返。
+
+    nmpa_pv 特殊处理：drug 参数可为 dict（cn_pv_keywords.build_nmpa_pv_query 的返回），
+    此时跳过 drug/event 翻译，直接使用 drug 作为 payload 基础。
     """
     if source not in DISPATCHABLE_SOURCES:
         raise ValueError("coze_dispatch: unsupported source %r (allowed: %s)"
                          % (source, sorted(DISPATCHABLE_SOURCES)))
     endpoint = endpoint or DEFAULT_ENDPOINT
-    # ① 中文药名 → 英文 INN（仅作用于英文源；resolver 缺失时降级为原样）
-    send_keyword, translated_drug = _translate_drug(drug)
-    if translated_drug:
-        print("[coze-dispatch][%s] 中文药名 %r → 英文 INN %r（自动映射）"
-              % (source, drug, send_keyword))
-    # ② 中文事件词 → 英文（对照表优先 + 在线 API 兜底；整短语保留不截断）
-    send_event, translated_event = _translate_event(event)
-    if translated_event:
-        print("[coze-dispatch][%s] 中文事件 %r → 英文 %r（自动映射）"
-              % (source, event, send_event))
-    payload = {
-        "source": source,
-        "mode": "search",
-        "keyword": send_keyword or "",
-        "multi_keywords": (send_event or "").strip(),
-        "query_origin": _query_origin(),
-    }
-    if date_from:
-        payload["date_from"] = date_from
-    if date_to:
-        payload["date_to"] = date_to
-    if extra:
-        payload.update(extra)
-    billing = _billing_fields(account_id, billing_token)
-    if billing:
-        payload.update(billing)
+
+    # nmpa_pv：结构化查询（drug 为 dict），不走 drug/event 翻译
+    # Coze 端 nmpa_pv 节点期望 keyword + multi_keywords（非 drug_kws/event_kws）
+    if source == "nmpa_pv" and isinstance(drug, dict):
+        drug_kws = drug.get("drug_kws", [])
+        event_kws = drug.get("event_kws", [])
+        payload = {
+            "source": source,
+            "mode": "search",
+            "keyword": " ".join(drug_kws) if len(drug_kws) > 1 else (drug_kws[0] if drug_kws else ""),
+            "multi_keywords": " ".join(event_kws),
+            "query_origin": _query_origin(),
+        }
+        # 保留可选字段（since/until/max_per/extra）
+        for _k in ("since", "until", "max_per"):
+            if drug.get(_k) is not None:
+                payload[_k] = drug[_k]
+        if extra:
+            payload.update(extra)
+        billing = _billing_fields(account_id, billing_token)
+        if billing:
+            payload.update(billing)
+        attach_coze_contract(payload, query=" ".join(drug.get("drug_kws", [])))
+    else:
+        # ① 中文药名 → 英文 INN（仅作用于英文源；resolver 缺失时降级为原样）
+        send_keyword, translated_drug = _translate_drug(drug)
+        if translated_drug:
+            print("[coze-dispatch][%s] 中文药名 %r → 英文 INN %r（自动映射）"
+                  % (source, drug, send_keyword))
+        # ② 中文事件词 → 英文（对照表优先 + 在线 API 兜底；整短语保留不截断）
+        send_event, translated_event = _translate_event(event)
+        if translated_event:
+            print("[coze-dispatch][%s] 中文事件 %r → 英文 %r（自动映射）"
+                  % (source, event, send_event))
+        payload = {
+            "source": source,
+            "mode": "search",
+            "keyword": send_keyword or "",
+            "multi_keywords": (send_event or "").strip(),
+            "query_origin": _query_origin(),
+        }
+        if date_from:
+            payload["date_from"] = date_from
+        if date_to:
+            payload["date_to"] = date_to
+        if extra:
+            payload.update(extra)
+        billing = _billing_fields(account_id, billing_token)
+        if billing:
+            payload.update(billing)
+
+        # ct-base coze_io_contract §1：统一注入 skill_version(顶层) + user_language(params)
+        # query 用用户原始输入（drug/event）做内容级语言检测，而非翻译后的英文 INN。
+        attach_coze_contract(payload, query="%s %s" % (drug or "", event or ""))
 
     if not run:
         print("[PREVIEW] coze-dispatch[%s] payload=%s (no network; add run to execute)"
@@ -190,58 +333,157 @@ def dispatch(source, drug, event=None, date_from=None, date_to=None,
         return _evidence_error(source, drug, event, err) if source in _EVIDENCE_SOURCES \
             else _generic_error(source, err)
 
-    import requests
-    tok = get_token(token)
-    headers = {"Content-Type": "application/json",
-               "Authorization": "Bearer %s" % tok}
-    safe = _sanitize(payload)
+    # 限流
+    _acquire_rate_limit()
+
+    # HTTP POST to Coze —— 主路径 /stream_run（SSE 流式），回退 /run
+    body = json.dumps(_sanitize(payload), ensure_ascii=False).encode("utf-8")
     try:
-        resp = requests.post(endpoint, headers=headers, json=safe, timeout=timeout)
-    except requests.exceptions.ProxyError:
-        # ct-base §5.49：系统代理残留 → 绕代理直连重试
-        resp = requests.post(endpoint, headers=headers, json=safe, timeout=timeout,
-                             proxies={"http": None, "https": None})
-    except requests.RequestException as e:
-        err = "request failed: %s" % e
-        print("[coze-dispatch][%s] %s" % (source, err))
-        return _evidence_error(source, drug, event, err) if source in _EVIDENCE_SOURCES \
-            else _generic_error(source, err)
+        projects = _coze_stream_once(body, timeout)
+        if projects is not None:
+            result = _projects_to_result(projects, source)
+            _maybe_write_out(out, result)
+            return result
+        # 流式无结果（workflow Output 未绑定 / 被 rejected）→ 回退 /run
+        print("[coze-dispatch][%s] /stream_run 无结果，回退 /run" % source,
+              file=sys.stderr)
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace") if e.fp else ""
+        print("[coze-dispatch][%s] /stream_run HTTP %s，回退 /run: %s"
+              % (source, e.code, err_body[:200]), file=sys.stderr)
+    except Exception as e:
+        print("[coze-dispatch][%s] /stream_run 失败(%s)，回退 /run: %s"
+              % (source, type(e).__name__, e), file=sys.stderr)
 
-    if resp.status_code != 200:
-        err = "HTTP %s: %s" % (resp.status_code, resp.text[:300])
-        print("[coze-dispatch][%s] %s" % (source, err))
-        return _evidence_error(source, drug, event, err) if source in _EVIDENCE_SOURCES \
-            else _generic_error(source, err)
-
-    data = {}
+    # 回退 /run（非流式）
     try:
-        data = resp.json()
-    except Exception:
-        data = {}
-    result = None
-    pl = data.get("project_list") if isinstance(data, dict) else None
-    if pl:
-        try:
-            result = json.loads(pl)
-        except Exception as e:
-            err = "project_list parse failed: %s" % e
-            print("[coze-dispatch][%s] %s" % (source, err))
-            return _evidence_error(source, drug, event, err) if source in _EVIDENCE_SOURCES \
-                else _generic_error(source, err)
-    if result is None:
-        err = "empty project_list from endpoint"
+        _acquire_rate_limit()
+        req2 = urllib.request.Request(CT_SEARCH_ENDPOINT, data=body,
+                                      headers=_stream_headers(), method="POST")
+        with urllib.request.urlopen(req2, timeout=timeout) as resp2:
+            data = json.loads(resp2.read().decode("utf-8"))
+        result = _parse_run_response(data, source)
+        _maybe_write_out(out, result)
+        return result
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace") if e.fp else ""
+        err = "HTTP %s: %s" % (e.code, err_body[:300])
+        print("[coze-dispatch][%s] %s" % (source, err), file=sys.stderr)
+        if e.code in (401, 403):
+            print("[coze-dispatch] Token 无效或已过期，请更新 config/coze.dat",
+                  file=sys.stderr)
+        return _evidence_error(source, drug, event, err) if source in _EVIDENCE_SOURCES \
+            else _generic_error(source, err)
+    except Exception as e:
+        err = "request failed: %s: %s" % (type(e).__name__, e)
+        print("[coze-dispatch][%s] %s" % (source, err), file=sys.stderr)
         return _evidence_error(source, drug, event, err) if source in _EVIDENCE_SOURCES \
             else _generic_error(source, err)
 
-    if out:
+
+def _projects_to_result(projects, source):
+    """projects 列表 → 本地统一格式 dict（与 /run 返回结构同构）。"""
+    return {
+        "source": source,
+        "count": len(projects),
+        "projects": projects,
+        "total_count": len(projects),
+    }
+
+
+def _parse_run_response(data, source):
+    """解析 /run（非流式）返回体 → 本地统一格式 {"source","projects","count","total_count"}。
+
+    兼容多种 project_list 格式：
+      - 旧格式（str）：{"projects": [...], "total_count": N}
+      - 新格式（str/dict）：
+        · faers 型：{"counts": {...}, "top_events": [...], "drug_total": N, ...}
+        · fda_label 型：{"n_results": N, "adverse_reactions": [...], "warnings": ...}
+        · dailymed 型：{"labeled": bool, "records": [...], "record_count": N, ...}
+        → 无 projects 时，用外层 total_count 或 pl 内 n_results/record_count 兜底，
+          并透传关键字段，供 multi_source / corroborative_sources 消费。
+    """
+    pl_raw = data.get("project_list")
+    if isinstance(pl_raw, str) and pl_raw:
         try:
-            os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
-            with open(out, "w", encoding="utf-8") as f:
-                json.dump(result, f, ensure_ascii=False, indent=2)
-            print("[OK] coze-dispatch[%s] wrote %s" % (source, out))
-        except Exception as e:
-            print("[WARN] coze-dispatch[%s] write %s failed: %s" % (source, out, e))
-    return result
+            pl = json.loads(pl_raw)
+        except (json.JSONDecodeError, TypeError):
+            pl = None
+    elif isinstance(pl_raw, dict):
+        pl = pl_raw
+    else:
+        pl = None
+    if isinstance(pl, dict):
+        projects = pl.get("projects", [])
+        # 优先用 pl 内 total_count；否则用外层 total_count；最后用 projects 长度
+        tc = pl.get("total_count",
+                     data.get("total_count",
+                              pl.get("n_results",
+                                      pl.get("record_count", len(projects)))))
+        result = {
+            "source": source,
+            "count": tc,
+            "projects": projects,
+            "total_count": tc,
+        }
+        # 透传新格式计数字段
+        for _k in ("counts", "top_events", "drug_total", "event_total",
+                   "grand_total", "drug", "api", "field",
+                   "n_results", "adverse_reactions", "warnings",
+                   "labeled", "detail", "records", "record_count",
+                   "matched_drug_terms", "query"):
+            if _k in pl:
+                result[_k] = pl[_k]
+        return result
+    if "projects" in data and "works" not in data:
+        data["works"] = data.pop("projects")
+        data["count"] = data.get("total_count", len(data["works"]))
+    data["source"] = source
+    return data
+
+
+def _maybe_write_out(out, result):
+    """out 非空时写盘。"""
+    if not out:
+        return
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+        with open(out, "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, indent=2)
+        print("[OK] coze-dispatch wrote %s" % out)
+    except Exception as e:
+        print("[WARN] coze-dispatch write %s failed: %s" % (out, e))
+
+
+# ── 流式检索生成器 ──────────────────────────────────────────────────────────
+def dispatch_stream(source, drug, event=None, date_from=None, date_to=None,
+                    run=False, timeout=300, token=None, endpoint=None,
+                    account_id=None, billing_token=None, extra=None,
+                    batch_size=5, progress=None):
+    """流式检索生成器：把 Coze 返回的 projects 按 batch_size 切片，依次 yield 给调用方。
+
+    内部复用 dispatch()：dispatch 已改 /stream_run（SSE）+ /run 回退。
+    每批最多 batch_size 条，最后一批可能不足。progress 回调逐批上报进度。
+    """
+    result = dispatch(source, drug, event, date_from, date_to,
+                      run=run, timeout=timeout, token=token, endpoint=endpoint,
+                      account_id=account_id, billing_token=billing_token, extra=extra)
+    if result is None or result.get("error"):
+        msg = "[coze-dispatch] 检索失败: %s" % (result.get("error") if result else "None")
+        if progress:
+            progress(msg)
+        else:
+            print(msg, file=sys.stderr)
+        return
+    projects = result.get("projects", [])
+    total = len(projects)
+    if progress:
+        progress("[coze-dispatch] 检索完成，共 %d 条，按 %d 条/批返回" % (total, batch_size))
+    for i in range(0, total, batch_size):
+        batch = projects[i:i + batch_size]
+        if progress:
+            progress("[coze-dispatch] 返回第 %d 批（%d 条）" % (i // batch_size + 1, len(batch)))
+        yield batch
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -259,10 +501,6 @@ class FaersShim:
     def fetch_counts(self, drug, event=None, field="patient.drug.medicinalproduct",
                      top=10, api_key=None, run=False, out=None,
                      date_from=None, date_to=None, timeout=120, retries=3):
-        if OFFLINE:
-            return self._real.fetch_counts(drug, event, field, top, api_key,
-                                           run=run, out=out, date_from=date_from,
-                                           date_to=date_to, timeout=timeout, retries=retries)
         # Coze 服务端用默认 field；忽略本地 api_key/retries（服务端自有 key/重试）
         return dispatch("faers", drug, event, date_from=date_from, date_to=date_to,
                         run=run, out=out, timeout=max(int(timeout), 120))
@@ -292,9 +530,6 @@ class FdaLabelShim:
 
     def fetch_label(self, drug, api_key=None, run=False, out=None, limit=5,
                     timeout=120, retries=3):
-        if OFFLINE:
-            return self._real.fetch_label(drug, api_key=api_key, run=run, out=out,
-                                          limit=limit, timeout=timeout, retries=retries)
         return dispatch("fda_label", drug, event=None, run=run, out=out,
                         timeout=max(int(timeout), 120))
 

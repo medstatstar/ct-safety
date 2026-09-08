@@ -6,7 +6,7 @@
   <img src="assets/icon.svg" width="240" height="240" alt="ct-safety logo"/>
 </div>
 
-> A safe-by-default pharmacovigilance skill that screens **FDA FAERS** public adverse-event data for drug–event safety signals (PRR / ROR / IC / EBGM with 95% CIs), with optional China official PV corroboration. Reads only public data — **zero confidential input (A-tier, `network=public-retrieval`)**.
+> A safe-by-default pharmacovigilance skill that screens **FDA FAERS** public adverse-event data for drug–event safety signals (PRR / ROR / IC / EBGM with 95% CIs), with optional China official PV corroboration. Reads only public data — **zero confidential input (A-tier, `network=public-retrieval`)**. Since v0.9.9, all retrieval uses a **thin local client** architecture: local side only computes (disproportionality / signal scoring), while all outbound retrieval goes to the Coze unified endpoint `ct-search.coze.site`.
 
 ## Who This Is For
 
@@ -18,23 +18,22 @@ The `ct-*` clinical-trial skill family covers the entire clinical-trial lifecycl
 
 ## Time & Volume Warning
 
-> ⚠️ **Runtime and download limits.** This skill queries openFDA over the public internet, so wall-clock time scales with how many individual case reports you pull. Measured on **2026-08-31** (drug `candesartan`, 53,248 matching reports, keyless anonymous quota, Shanghai / ~200 Mbps):
+> ⚠️ **Runtime and download limits.** Since v0.9.9, all retrieval goes through the Coze unified endpoint `ct-search.coze.site` (thin local client architecture). Wall-clock time depends on Coze-side processing + network. Measured on **2026-09-08** (Shanghai / ~200 Mbps, Coze endpoint):
 >
 > | Workload | Command shape | Measured wall-clock | Output |
 > |---|---|---|---|
-> | **Overview** (count-facet, the default path) | `ct_safety.py --drug candesartan --run` (no `--event`) | **6 s** | 53,248 matched reports, top-10 reactions |
-> | **Signal + 100 cases** | `ct_safety.py --drug candesartan --event NAUSEA --case-level 100 --run` | **57 s** | 100 individual cases |
-> | **Bulk download** | `fetch_reports.py --drug candesartan --max 500 --run` | **311 s** (5 pages, ≈62 s per 100-record page) | 500 raw reports |
-> | **Extrapolated full cap** | `--max 10000` = 100 pages | **≈103 min** (extrapolated from the 62 s/page rate above — not directly measured) | 10,000 raw reports |
+> | **Overview** (count-facet, the default path) | `ct_safety.py --drug candesartan --run` (no `--event`) | **≈10–30 s** | matched reports, top-10 reactions |
+> | **Signal detection** | `ct_safety.py --drug candesartan --event NAUSEA --run` | **≈15–45 s** | 2×2 table + PRR/ROR/IC/EBGM |
+> | **With CN-PV corroboration** | `ct_safety.py --drug osimertinib --event PNEUMONITIS --with-cn-pv --drug-cn 奥希替尼 --event-cn 肺炎 --run` | **≈20–60 s** | FAERS signal + China bulletin |
 >
 > **Per-run limits (match the implementation):**
 > - `fetch_reports.py --max <n>` → hard cap **10,000** (`HARD_CAP`); larger values are auto-clamped with a `[WARN]`.
 > - `ct_safety.py --case-level <n>` → **single-page** fetch, hard cap **100**; larger values are truncated with a `[WARN]`. It also requires `--event` (silently ignored otherwise). For bulk pulls use `fetch_reports.py --max` instead.
-> - openFDA quota: anonymous 240 req/min, 1,000 req/day per IP; free key 240 req/min, 120,000 req/day per key. Per-request timeout 120 s.
+> - openFDA quota (for local-direct `query_total` / `fetch_case_reports` only): anonymous 240 req/min, 1,000 req/day per IP; free key 240 req/min, 120,000 req/day per key. Per-request timeout 120 s.
 >
-> **What happens at the limit / on timeout:** exceeding a cap is **not an error** — the run truncates to the cap, prints `[WARN] ... clamped/truncated`, and returns partial results. Quota exhaustion returns HTTP **429**; add `--api-key` or lower your request rate. A single page timing out raises a retry-able error after 3 attempts.
+> **What happens at the limit / on timeout:** exceeding a cap is **not an error** — the run truncates to the cap, prints `[WARN] ... clamped/truncated`, and returns partial results. Coze-side quota exhaustion returns a structured error; add `--api-key` or lower your request rate. A single request timing out raises a retry-able error after 3 attempts.
 >
-> **How to avoid long waits:** start with the seconds-level overview to size the population before committing to a download; narrow the window with `--date-from` / `--date-to`; grow `--max` gradually (500 → 2000 → …); and register a free openFDA key to lift the daily quota.
+> **How to avoid long waits:** start with the overview to size the population before committing to a download; narrow the window with `--date-from` / `--date-to`; grow `--max` gradually (500 → 2000 → …).
 
 ## How to Use (in conversation)
 
@@ -106,16 +105,16 @@ Just tell the assistant what you want in plain language. Below are real examples
 **How to trigger real computation:**
 > After the branches resolve your intent, the same two-step workflow applies: overview auto-runs, detail waits for your confirmation (or "skip preview and run" to execute now).
 
-### Example 6 · Force the real run
+### Example 6 · Full evidence-tier signal score
 
 **You say:**
-> Skip preview and run — candesartan angioedema signal detection, now.
+> Give me a safety signal score for osimertinib pneumonitis, with evidence tier — pull in FDA label and China PV too.
 
 **Assistant replies (sketch):**
-> Acknowledged. Running the detailed FAERS retrieval and disproportionality analysis now, then returning the JSON / Markdown report.
+> I'll run the full multi-source triangulation: FAERS disproportionality (PRR/ROR/IC/EBGM) + FDA Label labeled-vs-unlabeled judgement + China official PV bulletins, then synthesize a Safety Signal Score (0–100) with T1–T4 evidence tier.
 
 **How to trigger real computation:**
-> "Skip preview and run" / "跳过预览，直接跑" is one explicit way to confirm: it tells the skill the overview is enough and you want Step 2 now. It is a **confirmation, not a bypass** — the same Step-2 guardrails apply, and a passing remark is never treated as consent.
+> This is the most comprehensive path — confirm the detail step (or "skip preview and run") and the skill queries all three sources, then scores and tiers the signal. The score and tier are written into the HTML/XLSX report.
 
 ## What It Can Do — Scenarios
 
@@ -151,10 +150,10 @@ Both are disproportionality measures on the drug–event 2×2 table. ROR (Report
 By default the skill shows an overview (totals + Top-N) and stops. Confirm the detail step, or say "skip preview and run" / "跳过预览，直接跑" — then it executes the FAERS retrieval and disproportionality analysis and returns JSON / Markdown (and optional PNG charts).
 
 **Does it output in Chinese?**
-Yes. The skill follows your input language: prompts and reports switch to Chinese on a `zh-*` locale and English otherwise. Code comments and documentation remain English-only.
+Yes. The skill follows your input language: prompts and reports switch to Chinese on a `zh-*` locale and English otherwise. The skill ships bilingual READMEs (English + 中文); code comments and SKILL.md remain English-only.
 
 **How do I configure the openFDA API key?**
-A key is **not required** — openFDA runs anonymously (240 req/min, 1,000 req/day per IP). For high throughput only, register a free key at https://open.fda.gov/api/register/ (email-only, no card). Provide it via one of three self-configured methods:
+A key is **not required** for the default retrieval path (via Coze unified endpoint). For local-direct fallback (`query_total` / `fetch_case_reports` only), openFDA runs anonymously (240 req/min, 1,000 req/day per IP). For high throughput only, register a free key at https://open.fda.gov/api/register/ (email-only, no card). Provide it via one of three self-configured methods:
 - Environment variable: `export OPENFDA_API_KEY=YOUR_KEY` (recommended, auto-read by every script);
 - A skill-root `.env` file: `OPENFDA_API_KEY=YOUR_KEY` (git-ignored, never shipped);
 - CLI flag: `--api-key YOUR_KEY`.
@@ -174,12 +173,12 @@ You stay in full control: the report is shown to you **before** anything is sent
 
 **Two-step workflow, safe by default.** Step 1 (overview: totals + Top-N) runs automatically. Step 2 (detailed retrieval / signal detection) runs **only after you explicitly confirm** — or when you say "skip preview and run". Nothing heavy executes until then, so a casual question never triggers a large download.
 
-**Outbound data disclosure.** The skill only reads public sources:
-- **FDA FAERS** via openFDA `https://api.fda.gov/drug/event.json` (required, quantitative);
-- **FDA Label** via openFDA `drug/label.json` when `--with-fda-label` is used (optional third source);
-- **国家不良反应监测中心** `cdr-adr.org.cn` public columns when `--with-cn-pv` is used (optional, qualitative corroboration only — narrative bulletins, no case counts, never fed into disproportionality).
+**Outbound data disclosure.** Since v0.9.9, the skill uses a **thin local client** architecture: local side only computes (disproportionality / signal scoring / labeled judgment), while ALL outbound retrieval goes to the Coze unified endpoint `ct-search.coze.site`. The skill only reads public sources:
+- **FDA FAERS** (required, quantitative) — retrieved via Coze `faers` node;
+- **FDA Label** when `--with-fda-label` is used (optional third source) — retrieved via Coze `fda_label` node;
+- **国家不良反应监测中心** `cdr-adr.org.cn` when `--with-cn-pv` is used (optional, qualitative corroboration only) — retrieved via Coze `nmpa_pv` node.
 
-There is **zero confidential data or information input** (A-tier: ordinary input + public retrieval, `network=public-retrieval`). The NMPA main site is WAF-blocked (HTTP 412) and is intentionally excluded. Your openFDA key, if used, is **stored only locally** and sent **only over HTTPS to the official openFDA API**.
+There is **zero confidential data or information input** (A-tier: ordinary input + public retrieval, `network=public-retrieval`). The NMPA main site is WAF-blocked (HTTP 412) and is intentionally excluded. Your openFDA key, if used for local-direct `query_total` / `fetch_case_reports`, is **stored only locally** and sent **only over HTTPS to the official openFDA API**.
 
 **Bug-report endpoint disclosure (ct-base §5 / §20.3, mandatory).** When you confirm sending a (sanitized) error report via the in-skill bug reporter (`adapters/bug_report.py`), the skill sends **only** the 11-key whitelist envelope (skill name / version / error type / error code / engine status / your free-text `description` / locale / `query_origin` / session hash / retry count / test) to the unified bug-report endpoint `https://ct-bugreport.coze.site/run`. It sends **no analysis data and no personal identifiers** — `description` is the only free-text field and you review it before consent (hard boundary: no identifiable person/institution/subject info). If you decline, nothing is sent; if there is no cloud call this session, the report is saved locally instead (`save_local_report`, data never leaves the machine).
 
@@ -193,9 +192,9 @@ Developer CLI, parameters, data-source boundaries, and error handling live here 
 
 | Source | Access | Status |
 |---|---|---|
-| FDA FAERS (openFDA `drug/event.json`) | Official public REST API, direct-connect, low-frequency no-key | Required (A-tier, quantitative) |
-| FDA Label (openFDA `drug/label.json`) | Same openFDA, no key; `adverse_reactions` / `warnings` | Optional `--with-fda-label` (labeled vs unlabeled risk) |
-| 国家不良反应监测中心 (cdr-adr.org.cn) | Public columns scraped (药物警戒快讯 / 数据报告 / 通知通告 / 器械·化妆品警戒快讯); no WAF, no key | Optional `--with-cn-pv` (qualitative corroboration only) |
+| FDA FAERS (openFDA `drug/event.json`) | Thin local client → Coze unified endpoint `ct-search.coze.site` (`faers` node). `query_total` / `fetch_case_reports` always local-direct | Required (A-tier, quantitative) |
+| FDA Label (openFDA `drug/label.json`) | Thin local client → Coze endpoint (`fda_label` node). `check_event` local-only | Optional `--with-fda-label` (labeled vs unlabeled risk) |
+| 国家不良反应监测中心 (cdr-adr.org.cn) | Thin local client → Coze endpoint (`nmpa_pv` node). Local keeps keyword expansion + evidence grading + cache | Optional `--with-cn-pv` (qualitative corroboration only) |
 
 ### Requirements
 
@@ -257,13 +256,13 @@ python scripts/fetch_cn_pv.py --drug "奥希替尼" --event-cn "肝损伤" --run
 
 | Error | Cause | Fix |
 |---|---|---|
-| `URLError` / timeout | No network / proxy | Confirm `api.fda.gov` reachable; configure proxy |
-| HTTP 429 / rate-limited | Exceeds openFDA quota (per request, not per row): anonymous 240/min, 1,000/day per IP; free key 240/min, 120,000/day per key | Add `--api-key`; or lower frequency |
+| `URLError` / timeout | No network / proxy | Confirm network reachable; configure proxy |
+| Coze endpoint error | Coze-side quota exhausted / token invalid / endpoint not allow-listed | Check Coze deployment status and `config.json` `auto_approve_endpoints` |
+| HTTP 429 / rate-limited | Exceeds openFDA quota (local-direct `query_total` / `fetch_case_reports` only) | Add `--api-key`; or lower frequency |
 | `--drug` without `--event` | Intent = top reactions, not a 2×2 signal | Auto-degrades to top-N report; add `--event <PT>` for a signal |
 | Field-name mismatch | Wrong drug-name field | Default `patient.drug.medicinalproduct`; standardize via `--field patient.drug.openfda.substance_name` |
-| CN-PV HTTP 412 / WAF | nmpa.gov.cn blocked | Expected — only cdr-adr.org.cn is scraped; NMPA excluded |
 | CN-PV 0 hits | Keyword too specific | Pass `--drug-cn` + `--event-cn`; raise `--cn-max` |
-| Multi-word event persistent 404 | That 3-word PT not indexed | Switch to standard MedDRA PT |
+| Multi-word event persistent 404 | That 3-word PT not indexed (local-direct path) | Switch to standard MedDRA PT |
 | `--max > 10000` | Quota hard cap | Auto-clamped to `HARD_CAP=10000`; note selection bias (API order, not random) |
 
 ### Comparative study design mode (multi-drug / single-SOC)
@@ -278,7 +277,7 @@ python tests/run_tests.py --live     # also runs tests/test_live.py (real openFD
 CT_SAFETY_LIVE=1 python tests/run_tests.py
 ```
 
-**Version**: v0.1.28 | **License**: MIT | **Authors**: medstatstar, phoe-zip
+**Version**: v0.9.9 | **License**: MIT | **Authors**: medstatstar, phoe-zip
 
 For feature requests, bug reports, or other feedback, please contact the author directly at medstatstar@gmail.com (Wintone Zhang / 张文彤).
 

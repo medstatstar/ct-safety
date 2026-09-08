@@ -53,6 +53,19 @@ import time
 
 import base64
 
+# ── ct-base coze_io_contract §1.1：user_language 备用提示（注入 params）────
+# 复用本技能 scripts/i18n.py（与 coze_dispatch 同源单一实现）。
+try:
+    _HERE0 = os.path.dirname(os.path.abspath(__file__))
+    _SCRIPTS_DIR0 = os.path.join(os.path.dirname(_HERE0), "scripts")
+    if _SCRIPTS_DIR0 not in sys.path:
+        sys.path.insert(0, _SCRIPTS_DIR0)
+    from i18n import resolve_user_language as _i18n_resolve_user_language, \
+        _current_lang as _i18n_current_lang
+except Exception:  # pragma: no cover — i18n 缺失时降级为系统 locale
+    _i18n_resolve_user_language = None
+    _i18n_current_lang = None
+
 # ── ct-base §5 公用凭据：与 ct-registry 同一份统一端点 token ──────────────
 # XOR key 与 ct-registry adapters/endpoint_token.py 保持一致以兼容同一 blob。
 OBFUSCATION_KEY = b"ct-registry-extsvc-obf-v1-9c4d2a"
@@ -122,8 +135,25 @@ def _sanitize(obj):
     return obj
 
 
+# ── §8.6 硬件绑定机器标识：统一从本技能 scripts/hardware_id.py 导入（ct-base 共享件 vendored 副本）──
+import os as _os
+import sys as _sys
+_sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "scripts"))
+try:
+    from hardware_id import hardware_id as _hardware_id
+except Exception:  # pragma: no cover
+    _hardware_id = None
+
+
 def _query_origin():
-    return hashlib.sha256(socket.gethostname().encode("utf-8")).hexdigest()[:32]
+    """§8.6 调用来源标识：硬件绑定的 sha256，跨 Windows 账号 / 改主机名 / 重装系统稳定。"""
+    if _hardware_id is not None:
+        return _hardware_id()
+    import socket as _s
+    try:
+        return "sha256:" + hashlib.sha256(_s.gethostname().encode("utf-8")).hexdigest()
+    except Exception:  # pragma: no cover
+        return "sha256:" + hashlib.sha256(b"unknown-host").hexdigest()
 
 
 def _billing_fields(account_id, billing_token):
@@ -139,6 +169,84 @@ def _billing_fields(account_id, billing_token):
     if billing_token and billing_token.strip():
         out["billing_token"] = billing_token.strip()
     return out
+
+
+# ── ct-base §20.13 / coze_io_contract：统一 coze 信封字段 ─────────────────
+# 所有 ct-* 调用 coze 端点（不分计算/检索）一律遵守 ct-base 契约：
+#   §1.2 `skill_version` → 顶层信封字段（与 query_origin 同级）
+#   §1.1 `user_language` → 进 params（非顶层，备用提示）
+# 飞书 searchlog（§2.1/§2.2）由 coze 服务端工作流负责，此处只发字段。
+
+# §1.2 单一事实来源 = SKILL.md frontmatter `version:`；读取失败回退内置常量。
+_SKILL_VERSION_FALLBACK = "0.9.8"
+
+
+def _skill_version() -> str:
+    """读本地 SKILL.md frontmatter 的 `version:`（契约 §1.2 单一事实来源）。
+
+    失败（文件缺失 / 无 version 键 / 解析异常）回退 _SKILL_VERSION_FALLBACK。
+    升版本只改 SKILL.md，无需动此函数。
+    """
+    try:
+        _here = os.path.dirname(os.path.abspath(__file__))
+        _skill_md = os.path.join(os.path.dirname(_here), "SKILL.md")  # adapters/../SKILL.md
+        with open(_skill_md, encoding="utf-8") as _f:
+            _text = _f.read()
+        _m = re.match(r"^---\s*\n(.*?)\n---", _text, re.DOTALL)
+        if _m:
+            for _line in _m.group(1).splitlines():
+                _kv = re.match(r"^version:\s*(\S+)\s*$", _line)
+                if _kv:
+                    return _kv.group(1).strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return _SKILL_VERSION_FALLBACK
+
+
+def _user_language_hint(query: str = "", override=None) -> str:
+    """契约 §1.1 三级判定：override > 输入内容检测 > 系统 locale 回退。
+
+    返回 'zh' / 'en'；i18n 完全缺失时返回 ''（调用方据此不注入 params）。
+    """
+    if _i18n_resolve_user_language is not None:
+        try:
+            return _i18n_resolve_user_language(query or "", override)
+        except Exception:
+            pass
+    if _i18n_current_lang is not None:
+        try:
+            return _i18n_current_lang()
+        except Exception:
+            pass
+    return ""
+
+
+def attach_coze_contract(payload: dict, query: str = "", override=None) -> dict:
+    """ct-base coze_io_contract §1：统一注入信封字段（就地修改并返回，幂等）。
+
+    - §1.2 `skill_version`：顶层信封字段（与 query_origin 同级）。
+    - §1.1 `user_language`：进 params（非顶层）；仅非空才注入。
+    - §2.1 `querystr`：请求参数 JSON（审计列）。统一端点的飞书 querystr 列是
+      调用方传入（state.querystr 透传），不传则走服务端 _fallback_querystr
+      兜底白名单——该白名单不含 skill_version / user_language / 日期范围，
+      客户端必须自带 querystr，版本号才能落进飞书（2026-09-06 修复）。
+      幂等：调用方已带 querystr 时不覆盖。
+    调用方在 _sanitize 之前调用即可；多余字段由服务端 extra='ignore' 安全忽略。
+    """
+    payload["skill_version"] = _skill_version()
+    _ul = _user_language_hint(query, override)
+    if _ul:
+        payload.setdefault("params", {})["user_language"] = _ul
+    if not payload.get("querystr"):
+        _qs = {k: payload[k] for k in (
+            "source", "mode", "keyword", "multi_keywords", "date_from",
+            "date_to", "max_pages", "reg_no", "indication", "case_no",
+            "skill_version") if payload.get(k) is not None}
+        if _ul:
+            _qs["user_language"] = _ul
+        if _qs:
+            payload["querystr"] = json.dumps(_qs, ensure_ascii=False, sort_keys=True)
+    return payload
 
 
 # ── 错源污染守卫 / response-shape guard ────────────────────────────────────
@@ -207,6 +315,10 @@ def search_nmpa(drug_keywords, event_keywords=None, terms=None, max_pages=3,
     billing = _billing_fields(account_id, billing_token)
     if billing:
         payload.update(billing)
+
+    # ct-base coze_io_contract §1：统一注入 skill_version(顶层) + user_language(params)
+    # query 用原始输入（药名+事件+术语）做内容级语言检测。
+    attach_coze_contract(payload, query=" ".join([primary_drug] + event_list + terms_list))
     if not run:
         print("[PREVIEW] nmpa-coze: no network request will be made. Add --run to execute.")
         print("[PREVIEW] Endpoint : %s" % endpoint)

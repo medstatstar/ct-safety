@@ -35,10 +35,10 @@ import signal_prioritizer
 import psur_generator
 
 
-# ── 轻本地端：默认外发 Coze；--offline 回退本机直连（2026-09-01）──────────────
-# 把 fetch_faers / fetch_fda_label 的「检索」调用重定向到 Coze 统一端点；
-# 本地计算（disproportionality / signal_score / check_event）与未外发的辅助检索
-# （query_total / fetch_case_reports / fetch_cn_pv 本机直连可达）保持本机直连。
+# ── 轻本地端：所有检索外发 Coze（2026-09-07 移除本地降级路径）────────────────
+# fetch_faers / fetch_fda_label / fetch_cn_pv 的「检索」全部经 Coze 统一端点外发；
+# 本地仅保留计算（disproportionality / signal_score / check_event）与辅助检索
+# （query_total / fetch_case_reports 直连 openFDA，结构化 state 无法上 Coze）。
 try:
     _ADAPTERS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                  os.pardir, "adapters")
@@ -46,23 +46,18 @@ try:
         sys.path.insert(0, _ADAPTERS_DIR)
     import coze_dispatch
     _COZE_DISPATCH_OK = True
-except Exception as _e:  # pragma: no cover - 缺失则强制离线
+except Exception as _e:  # pragma: no cover
     coze_dispatch = None
     _COZE_DISPATCH_OK = False
-    print("[WARN] coze_dispatch 不可用，强制本机直连: %s" % _e)
+    print("[WARN] coze_dispatch 不可用: %s" % _e)
 
-_OFFLINE = "--offline" in sys.argv
 if _COZE_DISPATCH_OK:
-    coze_dispatch.set_mode(_OFFLINE)
-    if not _OFFLINE:
-        # rebind 模块全局名 → 薄垫片：调用点零改动，下游无感消费同构 JSON
-        fetch_faers = coze_dispatch.FaersShim(fetch_faers)
-        fetch_fda_label = coze_dispatch.FdaLabelShim(fetch_fda_label)
-        print("[ct_safety] 检索后端：Coze 统一端点 ct-search.coze.site/run（轻本地端）")
-    else:
-        print("[ct_safety] 检索后端：--offline 本机直连")
+    # rebind 模块全局名 → 薄垫片：调用点零改动，下游无感消费同构 JSON
+    fetch_faers = coze_dispatch.FaersShim(fetch_faers)
+    fetch_fda_label = coze_dispatch.FdaLabelShim(fetch_fda_label)
+    print("[ct_safety] 检索后端：Coze 统一端点 ct-search.coze.site（轻本地端 · 无本地降级）")
 else:
-    print("[ct_safety] 检索后端：本机直连（coze_dispatch 不可用）")
+    print("[ct_safety] 检索后端：coze_dispatch 不可用（部分功能受限）")
 
 
 def _render_top_events(data, drug, cn_pv=None):
@@ -140,7 +135,7 @@ def run(drug, event, field, top, api_key, out_dir, with_cn_pv=False,
         case_dedup=True, dedup_jaccard=0.8, drop_suspected_dupes=False):
     # 预处理：非 ASCII 药物名 → 英文标准名（CLI 菜单确认）
     if resolve_drug_name and drug_name_resolver.is_non_ascii(drug):
-        resolved, _ = drug_name_resolver.resolve(drug, event=event)
+        resolved, _ = drug_name_resolver.resolve(drug, event=event, auto=True)
         if resolved:
             drug = resolved
         else:
@@ -197,9 +192,9 @@ def run(drug, event, field, top, api_key, out_dir, with_cn_pv=False,
             print("[TIP] CN-PV uses --drug=%r on cdr-adr.org.cn; pass --drug-cn (Chinese "
                   "name) for higher recall." % drug)
         cn_pv = fetch_cn_pv.search(cn_drug, None, cn_event, cn_terms, cn_max,
-                                  run=True, out=cn_pv_json,
-                                  max_pages=cn_max_pages, since=cn_since,
-                                  until=cn_until, use_cache=cn_use_cache)
+                                  out=cn_pv_json,
+                                  since=cn_since, until=cn_until,
+                                  use_cache=cn_use_cache)
 
     # Optional: NMPA bulletins via Coze browser channel (WAF-blocked locally)
     nmpa_res = None
@@ -214,7 +209,7 @@ def run(drug, event, field, top, api_key, out_dir, with_cn_pv=False,
         if nmpa_coze is not None:
             nm_drug = drug_cn or drug
             nm_event = event_cn or event
-            from fetch_cn_pv import expand_drug_keywords, expand_event_keywords
+            from cn_pv_keywords import expand_drug_keywords, expand_event_keywords
             nm_out = nmpa_out or os.path.join(out_dir, "nmpa_coze.json")
             nmpa_res = nmpa_coze.search_nmpa(
                 expand_drug_keywords(nm_drug),
@@ -1179,8 +1174,6 @@ def main():
     ap.add_argument("--date-from", help="filter receivedate >= YYYYMMDD (e.g. 20200101)")
     ap.add_argument("--date-to", help="filter receivedate <= YYYYMMDD (e.g. 20261231)")
     ap.add_argument("--run", action="store_true")
-    ap.add_argument("--offline", action="store_true",
-                    help="（可选）本机直连检索，不走 Coze 统一端点；默认外发 Coze（轻本地端）")
     ap.add_argument("--out-dir", default="./out")
     # #6: continuity correction + control validation
     ap.add_argument("--no-continuity", action="store_true",
@@ -1304,9 +1297,10 @@ def main():
         return
     run(args.drug, args.event, args.field, args.top, args.api_key, args.out_dir,
         args.with_cn_pv, args.drug_cn, args.event_cn, args.cn_terms, args.cn_max,
-        args.date_from, args.date_to, args.benchmark_drug, args.top_events_signal,
         cn_max_pages=args.cn_max_pages, cn_since=args.cn_since,
         cn_until=args.cn_until, cn_use_cache=not args.cn_no_cache,
+        date_from=args.date_from, date_to=args.date_to,
+        benchmark_drugs=args.benchmark_drug, top_events_signal=args.top_events_signal,
         with_nmpa_coze=args.with_nmpa_coze, nmpa_out=args.nmpa_out,
         continuity=not args.no_continuity, trend=args.trend,
         compare_drugs=args.compare_drugs, with_fda_label=args.with_fda_label,

@@ -1,6 +1,27 @@
 # Changelog — ct-safety
 
-## v0.9.8 (2026-09-01) · 轻本地端：safety 检索默认外发 Coze 统一端点（本地提交，未发布）
+## v0.9.9 — 2026-09-07 · 全检索上 Coze + 移除本地降级路径 + 合规整改（轻本地端架构完成）
+
+- **移除所有本地降级路径（`--offline` / `OFFLINE` 模式删除）**：`ct_safety.py`、`corroborative_sources.py`、`coze_dispatch.py` 全部移除 `--offline` 参数和 `OFFLINE` 全局变量。所有检索（faers / fda_label / dailymed / rxclass / fda_recall / hk_pv / cn_pv / nmpa_pv）一律外发 Coze 统一端点 `ct-search.coze.site`，本地仅保留计算（disproportionality / signal_score / check_event）和辅助直连（query_total / fetch_case_reports）。
+- **`fetch_cn_pv.py` 改造为轻本地端（v3）**：抓取执行器上移 Coze `cn_pv` 节点，本地仅保留词表扩展、证据分级（`_grade_hit`）、结果组装和 `cn_pv_cache.json` 缓存。`--run` 参数已移除（不再需要显式触发网络请求，Coze 端自动执行）。
+- **新增 `scripts/cn_pv_keywords.py`**：CN-PV 关键词构造器（从 `fetch_cn_pv.py` 抽出词表扩展逻辑），提供 `build_cn_pv_query()` / `expand_drug_keywords()` / `expand_event_keywords()` / `query_fingerprint()`，供 `fetch_cn_pv.py` 和 `ct_safety.py`（nmpa_coze 通道）共用。
+- **新增 `references/cn_pv_contract.md`**：定义 Coze 端 `cn_pv` source 节点的请求/响应 payload 契约（对齐 ct-base §20.14.4 实施模式）。
+- **`coze_dispatch.py` 支持结构化查询**：`dispatch()` 新增 `cn_pv` 特殊处理——当 `source == "cn_pv"` 且 `drug` 参数为 dict 时，跳过 drug/event 翻译，直接使用 dict 作为 payload 基础。
+- **`corroborative_sources.py` 移除本地抓取类**：`DailyMedSource` / `RxClassSource` / `FdaRecallSource` 三个本地抓取类已移除（逻辑上 Coze 节点），仅保留 `CozeSource` 薄包装和 `collect()` 汇总判定。
+- **drug_name_resolver 对齐 ct-base §6.2 Triage 四级交互策略**：新增 `resolve_for_dialog()` 对话环境专用函数（无 `input()` 阻塞、无菜单弹出）；`ct_safety.py` 和 `coze_dispatch.py` 均改用 `auto=True` / `resolve_for_dialog()`，确保 Simple/Middle 路径不弹菜单；CLI 环境仍可用 `resolve(auto=False)` 弹出多候选编号菜单。
+- **合规整改**：`references/cn_pv_contract.md` 加入 §16.7 排除清单（`.gitignore` + `.clawhubignore` + ct-base `docs/07-publish-checklist.md`），解决 §16.2 英文-only 违反；`corroborative_sources.py` 死代码清理（移除 `DailyMedSource`/`RxClassSource`/`FdaRecallSource` + `_get()`），消除 F17 WARN。
+- **文档更新**：`references/data_source_channels.md` 更新 CN-PV 状态描述；`references/fetch_pipeline.md` 和 `references/ADVANCED.md` 更新 drug_name_resolver 说明；`SKILL.md` 数据源表待同步（标记 TODO）。
+
+## v0.9.8 — 2026-09-03 · 对齐 ct-base coze_io_contract §1（coze 信封合规，并入已发布 0.9.8 线）
+
+- **统一遵守 ct-base 契约（用户 2026-09-03 明确：coze 调用不分计算/检索端点，一律遵守）**：`adapters/coze_dispatch.py::dispatch()` 与 `adapters/nmpa_coze.py::search_nmpa()` 两个 coze 出站 payload 现统一注入契约信封字段：
+  - **§1.2 `skill_version`**（顶层信封字段，与 `query_origin` 同级）：新增 `_skill_version()` 读取器，读 `SKILL.md` frontmatter `version:`（单一事实来源，失败回退 `"0.9.8"`）。
+  - **§1.1 `user_language`**（进 `params`，备用提示）：复用 `scripts/i18n.py::resolve_user_language()` 三级判定（override > 输入内容检测 > 系统 locale）；query 用用户原始输入（药名/事件）做内容级检测，非翻译后的英文 INN。
+  - 新增 `adapters/nmpa_coze.py::attach_coze_contract(payload, query, override)` 统一助手（幂等、就地注入），`coze_dispatch` 从 `nmpa_coze` 复用，避免双份实现。
+- **§2.1/§2.2（飞书 searchlog）属 coze 服务端职责**：用户确认 coze 工作流侧已实现 `querystr`/`resultstr` 落库；ct-safety 客户端仓库只含 coze 客户端、不含飞书写库代码，故合规动作限于发出 `skill_version`（供服务端写 `querystr`）。`runtime_sec` 由服务端 `/run` 入口打 `received_at` 计算，客户端不动。
+- **向后兼容**：多余字段由 coze 端 pydantic `extra='ignore'` 安全忽略；`params` 键缺失时按契约仅非空注入 `user_language`；i18n 缺失时降级为不注入 `params`（不报错）。
+
+### 0.9.8 初始架构变更 (2026-09-01) · 轻本地端：safety 检索默认外发 Coze 统一端点（本地提交，未发布）
 
 架构级变更（用户指令："本地所有的 safety 检索需求一律改为外发 coze 实现"）：
 

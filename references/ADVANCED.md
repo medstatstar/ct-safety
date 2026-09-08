@@ -62,7 +62,7 @@ Since v0.9.8 all safety retrieval uses a **thin local client**: the local side o
 ### Bilingual retrieval send-strategy (ct-base `bilingual_retrieval.md`)
 
 All six English sources translate keywords **before** dispatch, in `coze_dispatch.dispatch()`:
-- drug name → `drug_name_resolver.resolve(drug, auto=True)` (map `references/drug_name_map.json`, 471 entries);
+- drug name → `drug_name_resolver.resolve_for_dialog(drug)` (dialog-safe, no menu, maps `references/drug_name_map.json`, 471 entries); CLI-only `resolve(auto=False)` retains the multi-candidate number menu for terminal use.
 - event term → `kw_localize.localize_with_fallback(event, "en")` (term map first, online translate API fallback, `CT_TRANSLATE_ONLINE=0` disables).
 Both degrade to verbatim passthrough if the resolver is missing. This fixed the Chinese-keyword HTTP 400 against openFDA (verified live: `二甲双胍 + 乳酸酸中毒` → `metformin + Lactic acidosis` → real 2×2).
 

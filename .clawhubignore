@@ -64,6 +64,8 @@ adapters/coze_project/
 **/coze_system_prompt_v*.md
 **/ops.md
 scripts/tests/
+# ── Coze 端接口契约（cn_pv payload 契约，含 ct-search.coze.site 端点 URL）──
+references/cn_pv_contract.md
 
 # ── 补齐双份 ignore 差异项（2026-08-29）──
 *.py[cod]
