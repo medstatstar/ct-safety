@@ -40,7 +40,7 @@ PMDA JADER 验证码确认属实，但前期 Blocked 表漏记"可经浏览器/C
 
 | 源类型 | 归属 | 理由 |
 |---|---|---|
-| 批量源（Canada / Japan） | **本地批量入库** | 整库文件物化到本地磁盘（放 skill 包外 `CT_SAFETY_DATA_DIR`，默认 `C:/Users/WintoneFileSrv/ct-safety-data`），解析→建全局 2×2 索引→喂现有 PRR/ROR/IC/EBGM 引擎。Coze `/run` 是无状态请求-响应、无持久化 GB 级存储、其 RAG 知识库给不了精确计数，故**批量源不能上 Coze**。不依赖 Coze 部署，守住发布红线。 |
+| 批量源（Canada / Japan） | **本地批量入库** | 整库文件物化到本地磁盘（放 skill 包外 `CT_SAFETY_DATA_DIR`，默认 `~/ct-safety-data`），解析→建全局 2×2 索引→喂现有 PRR/ROR/IC/EBGM 引擎。Coze `/run` 是无状态请求-响应、无持久化 GB 级存储、其 RAG 知识库给不了精确计数，故**批量源不能上 Coze**。不依赖 Coze 部署，守住发布红线。 |
 | 实时检索源（TGA DAEN） | **Power Pages / Dataverse 后端，无官方 API** | TGA 是 Power Pages 站点（非官方 API），归实时检索源但**不能直接套 FAERS 适配器**：需逆向其匿名 Web API 端点（实体名未知），且本机直连受 WAF/CORS 风险高；被拦则外发 Coze（新建 `tga_node`，**成本高于 FAERS**，且触发部署红线）。 |
 
 > 这与用户"所有 safety 检索外发 Coze"指令**不冲突**——该指令针对*实时检索*；批量入库+重本地计算是另一类，本就本地运行。

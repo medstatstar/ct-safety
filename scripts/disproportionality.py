@@ -25,7 +25,9 @@ Extensions added (v0.1.8, inspired by upstream scan):
 import argparse
 import json
 import math
+import os
 import re
+import sys
 from ebgm import ebgm  # FDA MGPS EBGM (gamma-Poisson mixture shrinkage)
 
 
@@ -434,19 +436,30 @@ def map_soc(pt):
     compound term (e.g. "CHEST PAIN" must NOT collapse onto bare "PAIN" ->
     General bucket; it is now an explicit Cardiac entry above). Returns
     "Unmapped / 未归类" when nothing matches.
+
+    User-supplied extension (upgrade E, 2026-09-29): if the env var
+    ``CT_SAFETY_SOC_MAP`` points to a JSON/CSV file (or ``--soc-map`` was
+    passed on the CLI and loaded via :func:`load_user_soc_map`), those PT→SOC
+    pairs are merged OVER the built-in dictionary at lookup time. The user file
+    is never bundled — MedDRA is license-restricted, so we only accept the
+    sponsor's own licensed mapping.
     """
     if not pt:
         return "Unmapped / 未归类"
     key = re.sub(r"[^A-Za-z ]", "", str(pt)).strip().upper()
     if not key:
         return "Unmapped / 未归类"
+    user = _USER_SOC_MAP.get(key)
+    if user:
+        return user
     soc = PT_TO_SOC.get(key)
     if soc:
         return soc
     # Substring fallback: multi-word dictionary keys only, longest match wins.
+    # Also consult user map multi-word keys first (user takes precedence).
     best = None
     best_len = 0
-    for k, v in PT_TO_SOC.items():
+    for k, v in list(_USER_SOC_MAP.items()) + list(PT_TO_SOC.items()):
         if len(k.split()) < 2:
             continue  # skip generic single-word keys in fallback
         if k in key or key in k:
@@ -454,6 +467,57 @@ def map_soc(pt):
                 best = v
                 best_len = len(k)
     return best if best else "Unmapped / 未归类"
+
+
+# ---------------------------------------------------------------------------
+# User-supplied PT→SOC extension map (upgrade E). Loaded lazily from the env
+# var CT_SAFETY_SOC_MAP or explicitly via load_user_soc_map(path). Never
+# bundled (MedDRA license stays with the sponsor's own copy).
+# ---------------------------------------------------------------------------
+_USER_SOC_MAP = {}
+
+
+def load_user_soc_map(path):
+    """Load a user PT→SOC mapping file (JSON {PT: SOC} or CSV/TSV two columns).
+
+    Keys are normalized the same way as :func:`map_soc` (strip non-letters,
+    upper). Returns the number of entries loaded. Safe to call repeatedly;
+    later loads merge/overwrite earlier ones."""
+    global _USER_SOC_MAP
+    if not path:
+        return 0
+    loaded = 0
+    try:
+        if path.lower().endswith(".json"):
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            items = data.items() if isinstance(data, dict) else [
+                (d.get("pt") or d.get("PT"), d.get("soc") or d.get("SOC"))
+                for d in data]
+        else:
+            import csv
+            items = []
+            with open(path, encoding="utf-8-sig", newline="") as f:
+                delim = "\t" if "\t" in open(path, encoding="utf-8").read(4096) else ","
+                for row in csv.reader(f, delimiter=delim):
+                    if len(row) >= 2 and row[0].strip():
+                        items.append((row[0].strip(), row[1].strip()))
+        for pt, soc in items:
+            if not pt or not soc:
+                continue
+            key = re.sub(r"[^A-Za-z ]", "", str(pt)).strip().upper()
+            if key:
+                _USER_SOC_MAP[key] = str(soc).strip()
+                loaded += 1
+    except Exception as e:  # noqa: BLE001 - extension is best-effort
+        print("[WARN] user SOC map not loaded (%s): %s" % (path, e), file=sys.stderr)
+    return loaded
+
+
+def init_soc_map_from_env():
+    """Auto-load CT_SAFETY_SOC_MAP if set. Call once at CLI start."""
+    p = os.environ.get("CT_SAFETY_SOC_MAP", "")
+    return load_user_soc_map(p) if p else 0
 
 
 # ----------------------------------------------------------------------------
@@ -487,6 +551,48 @@ CONTROL_DRUGS = {
 }
 
 
+def load_control_pairs(path):
+    """Merge external benchmark control pairs into CONTROL_DRUGS (upgrade E).
+
+    File forms:
+      JSON: {"positive": [["drug","event"], ...] or [{"drug":..,"event":..}],
+             "negative": [...]}
+      CSV/TSV: three columns group,drug,event (header optional).
+    Lets a sponsor validate the pipeline against THEIR OWN published known-
+    positive/negative benchmark set (e.g. WHO VigiBase case studies, FDA
+    safety communications) instead of only the 9 built-in anchors.
+    Returns counts {positive, negative} added.
+    """
+    added = {"positive": 0, "negative": 0}
+    if not path:
+        return added
+    try:
+        if path.lower().endswith(".json"):
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            for grp in ("positive", "negative"):
+                for item in data.get(grp, []):
+                    if isinstance(item, dict):
+                        pair = (item.get("drug", ""), item.get("event", ""))
+                    else:
+                        pair = (item[0], item[1])
+                    if pair[0] and pair[1]:
+                        CONTROL_DRUGS[grp].append(pair)
+                        added[grp] += 1
+        else:
+            import csv
+            with open(path, encoding="utf-8-sig", newline="") as f:
+                delim = "\t" if "\t" in open(path, encoding="utf-8").read(4096) else ","
+                for row in csv.reader(f, delimiter=delim):
+                    if len(row) >= 3 and row[0].strip() in ("positive", "negative"):
+                        CONTROL_DRUGS[row[0].strip()].append(
+                            (row[1].strip(), row[2].strip()))
+                        added[row[0].strip()] += 1
+    except Exception as e:  # noqa: BLE001 - extension best-effort
+        print("[WARN] control pairs not loaded (%s): %s" % (path, e), file=sys.stderr)
+    return added
+
+
 def summarize_control_validation(records):
     """Aggregate the outcome of a --validate-controls run.
 
@@ -515,15 +621,22 @@ def summarize_control_validation(records):
 
 def main():
     ap = argparse.ArgumentParser(description="Disproportionality from 2x2 table.")
-    ap.add_argument("--a", type=float, required=True)
-    ap.add_argument("--b", type=float, required=True)
-    ap.add_argument("--c", type=float, required=True)
-    ap.add_argument("--d", type=float, required=True)
+    ap.add_argument("--a", type=float, default=None)
+    ap.add_argument("--b", type=float, default=None)
+    ap.add_argument("--c", type=float, default=None)
+    ap.add_argument("--d", type=float, default=None)
     ap.add_argument("--in", dest="infile", help="read counts from fetch_faers JSON")
     ap.add_argument("--out", help="output JSON path")
     ap.add_argument("--soc", help="map a MedDRA PT to SOC (no 2x2 needed)")
     ap.add_argument("--bh", nargs="*", type=float, help="run Benjamini-Hochberg on p-values")
+    ap.add_argument("--soc-map", help="user PT→SOC extension file (JSON/CSV); also "
+                    "honors env CT_SAFETY_SOC_MAP (upgrade E)")
     args = ap.parse_args()
+
+    # upgrade E: load user-supplied SOC map (explicit path wins, then env)
+    _n = load_user_soc_map(args.soc_map) if args.soc_map else init_soc_map_from_env()
+    if _n:
+        print("[OK] user SOC map loaded: %d entries" % _n, file=sys.stderr)
 
     if args.soc:
         print(json.dumps({"pt": args.soc, "soc": map_soc(args.soc)},
@@ -539,9 +652,11 @@ def main():
         cnt = data["counts"]
         a, b, c, d = cnt["a"], cnt["b"], cnt["c"], cnt["d"]
         drug, event = data.get("drug"), data.get("event")
-    else:
+    elif None not in (args.a, args.b, args.c, args.d):
         a, b, c, d = args.a, args.b, args.c, args.d
         drug = event = None
+    else:
+        ap.error("provide --a/--b/--c/--d, or --in, or use --soc/--bh (no 2x2 needed)")
 
     res = compute(a, b, c, d)
     if drug:

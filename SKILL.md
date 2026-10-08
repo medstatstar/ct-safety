@@ -3,7 +3,7 @@ slug: ct-safety
 displayName: Clinical Trial Safety Signal / 临床试验安全信号专家
 name: ct-safety
 cn_name: 临床试验安全信号专家
-version: 0.9.10
+version: 0.10.0
 invocable: true
 required_commands: [python]
 summary: "基于 FDA FAERS 筛查药物-事件安全信号，计算 disproportionality（PRR / ROR / IC / EBGM，含 95% CI）与安全信号评分（0–100，T1–T4）。数据源：FDA FAERS（openFDA drug/event.json）、FDA 标签（drug/label.json）、中国 NMPA 药物警戒通报（cdr-adr.org.cn）、DailyMed 说明书、RxClass MED-RT、openFDA 召回执法、香港 ADR 警报。仅公开数据，零保密输入。"
@@ -50,6 +50,22 @@ Family standard: `ct-base/references/continuity.md` (pattern A). Echo the block 
 
 # Clinical Trial Safety Signal
 
+## Published Application
+
+| Item | Value |
+|---|---|
+| Share link | `https://ct-safety.app.workbuddy.host/` |
+| appId | `wbapp_GyOm0cdJ1qHoaQxlFZOVwl` |
+| domainPrefix | `ct-safety` |
+| Deploy metadata | `workbench/app.config.json` |
+| Deployed as | Static site (`python -m http.server $PORT --bind 0.0.0.0`) |
+| Payload | `WorkBuddy/2026-09-14-14-39-40/deploy_cs/static/index.html` (built from the ct-registry shell via `deploy_cs/build.py`; hand-patched since — rebuild FAILs on a drifted const-block rule) |
+
+> **Re-publish rule**: always overwrite with the existing `appId` — the link must stay
+> `https://ct-safety.app.workbuddy.host/`. Never `createNewApp`. After deploy, assert the returned
+> `shareLink` equals the expected URL (see ct-base §13.5 dirty-binding red line). Last republished
+> 2026-09-26 (feedback two-stage fix).
+
 > Safe by default: **overview-first**. Step 1 (overview) runs automatically; Step 2 (detailed retrieval) runs ONLY after the user explicitly confirms.
 >
 > **What counts as explicit confirmation.** Any unambiguous go-ahead — e.g. "yes, run the detail" / "确认，跑详情",
@@ -77,37 +93,30 @@ Two categories — **quantitative** (2×2 disproportionality) and **corroborativ
 | Category | Source | Access | Status |
 |---|---|---|---|
 | Quantitative | FDA FAERS (`drug/event.json`) | Thin local client (Coze unified endpoint `ct-search.coze.site`). `query_total` / `fetch_case_reports` always local-direct (structured state cannot round-trip through Coze) | Required (A-tier) |
+| Quantitative | **MAUDE 器械不良事件 (`device/event.json`)** — `--device` | Same thin-client single-egress via Coze (`source='maude'`). Device dimension defaults to `patient.device.brand_name`; 2×2 & disproportionality reused unchanged | Optional (需 Coze 侧已部署 `maude` 节点) |
 | Quantitative | FDA Label (`drug/label.json`) | Thin local client (Coze unified endpoint). `check_event` local-only | Optional `--with-fda-label` |
 | Corroborative | DailyMed SPL · RxClass MED-RT · openFDA Enforcement | Thin local client (Coze unified endpoint) | Optional `corroborative_sources.py` |
 | Qualitative | cdr-adr.org.cn | Thin local client (Coze `nmpa_pv` node; local keeps keyword expansion + evidence grading + cache) | Optional `--with-cn-pv` |
 | Qualitative (CN add-on) | drugoffice.gov.hk (HK ADR Alerts) | Thin local client (Coze `hk_pv` node) | Coze node written; after deployment |
 
+## RWE 扩展参考（v0.10.0 · OMOP CDM + HADES 方法链）
+
+| 工具 | 来源 | 用途 | 接入方式 |
+|---|---|---|---|
+| **OMOP CDM** (OHDSI) | `github.com/OHDSI/CommonDataModel` | 通用数据模型：从仓库取对应版本 DDL 脚本在 PostgreSQL/Snowflake 建库，把医院 HIS、医保或注册登记数据 ETL 成标准表，之后所有 RWE 分析脚本可跨数据源通用 | RWE 远期扩展——统一数据模型层 |
+| **HADES** (OHDSI) | `github.com/OHDSI/Hades` | RWE 分析工具栈：CohortMethod 做倾向性评分匹配，CohortDiagnostics 出队列质量诊断报告 | RWE 远期扩展——方法学引用 |
+
+> **边界**：ct-safety 当前聚焦 FAERS 信号检测。OMOP CDM + HADES 作为 RWE 方向的远期扩展参考，不与现有 FAERS 定量分析耦合。
+
 **Key mechanism:** openFDA works keyless (anonymous 240 req/min, 1,000 req/day per IP); an optional free key only raises quota. The key, when used, is **stored locally only** (env var / local `.env`) and sent **only over HTTPS to the official openFDA endpoint** (when using local-direct `query_total` / `fetch_case_reports`) — never to any third party. NMPA main site (nmpa.gov.cn) is WAF-blocked (HTTP 412) for local direct fetch, but is reachable via the Coze browser channel (`--with-nmpa-coze`, source=`nmpa_pv`) — **verified live 2026-09-01** (drug=methotrexate → Bulletin No.75, tier=dedicated bulletin). All data are public adverse-event reports; zero confidential input. Endpoint details, indexable/non-indexable fields, and `count` endpoint pitfalls: `references/fetch_pipeline.md`.
 
 ### Architecture — thin local client (default: outbound to Coze)
 
-Since v0.9.9 all safety retrieval uses a **thin local client**: the local side only computes (disproportionality / signal_score / check_event), while ALL outbound retrieval goes to the Coze unified endpoint `ct-search.coze.site` (shared with ct-registry). `adapters/coze_dispatch.py` rebinds global names via `FaersShim` / `FdaLabelShim`, so call sites need zero changes. **No local fallback path** (`--offline` removed in v0.9.9).
-
-- **All retrieval outbound:** faers / fda_label / dailymed / rxclass / fda_recall / hk_pv / nmpa_pv — all via Coze unified endpoint (`/stream_run` SSE primary, `/run` fallback). No local browser dependency; immune to egress / WAF limits.
-- **Always local-direct (documented exception):** `query_total` / `fetch_case_reports` (arbitrary query / raw cases — structured state cannot round-trip through Coze), `check_event` (pure local judgment).
-- **Publish red line:** Coze-side nodes take effect only after the author uploads the workflow bundle; **the outbound path depends on Coze deployment.** Expanded: `references/ADVANCED.md`.
+Since v0.9.9 all safety retrieval uses a **thin local client**: the local side computes (disproportionality / signal_score / check_event); ALL outbound retrieval goes to the Coze unified endpoint `ct-search.coze.site` (shared with ct-registry) via `adapters/coze_dispatch.py` (`FaersShim` / `FdaLabelShim` rebinding, call sites unchanged). **No local fallback** (`--offline` removed). Local-direct exceptions: `query_total` / `fetch_case_reports` (structured state can't round-trip Coze) + `check_event` (pure local). Publish red line + expanded: `references/ADVANCED.md`.
 
 ### Blocked / excluded sources (verified 2026-09-01)
 
-Not silently dropped — each was tested from this machine; reasons recorded in `multi_source.COUNT_SOURCE_FEASIBILITY` / `corroborative_sources.BLOCKED_SOURCES`. Full evidence table: `references/ADVANCED.md`.
-
-| Source | Status |
-|---|---|
-| PMDA JADER (Japan) | Not automatable (live) — captcha; full DB CSV obtainable (planned) |
-| Health Canada (live API) | Legacy API unreachable; open-data ZIP planned |
-| VAERS / CDC WONDER | Needs data-use agreement (403) |
-| EudraVigilance (EMA) | Needs authorization |
-| VigiAccess / VigiBase (WHO) | No public API (SPA; full access paid) |
-| MHRA iDAP (UK) · Taiwan FDA PV | Unreachable locally |
-
-Re-test before claiming "no data" — conditions may change.
-
-**Planned (deferred 2026-09-01):** T1 trio — Health Canada bulk ZIP / PMDA JADER full CSV / TGA DAEN live retrieval. Feasibility, access models, and architecture: `references/roadmap_external_sources.md`.
+Not silently dropped — each tested from this machine; reasons in `multi_source.COUNT_SOURCE_FEASIBILITY` / `corroborative_sources.BLOCKED_SOURCES`; blocked table + planned T1 trio → **`references/blocked_sources.md`**.
 
 ## Methods
 
@@ -126,6 +135,7 @@ Full formulas, thresholds, EBGM/MGPS math, FDR, aROR, trend, and score/tier weig
 | Capability | Flag / Source |
 |---|---|
 | Drug–event signal detection (PRR/ROR/IC/EBGM) + multi-method cross-judgement | FAERS |
+| **器械不良事件信号检测（同一套 2×2/PRR/ROR/IC/EBGM 计算）** | MAUDE via `--device`（Coze `source='maude'`，维度 `patient.device.brand_name`；**上线前需 Coze 控制台部署 `maude` 节点**） |
 | Statistical guards (BH-FDR · PT→SOC · sparse-2×2 `--validate-controls`) | — |
 | HTML + XLSX core deliverables (JSON/MD backup) | — |
 | China official PV bulletins (qualitative only) | `--with-cn-pv` |

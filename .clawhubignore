@@ -75,3 +75,7 @@ references/cn_pv_contract.md
 Thumbs.db
 *.so
 *.egg-info/
+
+# ── 工作台整目录排除（2026-09-16 新增，§16.12）──
+# 工作台前端全部代码与文档（含发布元数据 app.config.json）不随技能发布。
+workbench/

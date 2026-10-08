@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# §16.9 exempt — keyword localization calls the translation API and must stay local
+# (infra-shared exemption per §16.9); not a retrieval/website call subject to adapters/.
 """
 kw_localize.py -- search-keyword language localization for the ct- clinical-trial
 library (shared standard; lives in ct-base/scripts and is consumed by ct-registry,

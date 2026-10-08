@@ -37,7 +37,7 @@ import zipfile
 from pathlib import Path
 
 # ── 数据目录（skill 包外，避免被发布打包）──────────────────────────────
-ENV = os.environ.get("CT_SAFETY_DATA_DIR", r"C:/Users/WintoneFileSrv/ct-safety-data")
+ENV = os.environ.get("CT_SAFETY_DATA_DIR", str(Path.home() / "ct-safety-data"))
 CANADA_DIR = Path(ENV) / "canada"
 ZIP_PATH = CANADA_DIR / "extract_extrait.zip"
 EXTRACT_DIR = CANADA_DIR / "extracted"

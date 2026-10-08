@@ -156,6 +156,33 @@ def _query_origin():
         return "sha256:" + hashlib.sha256(b"unknown-host").hexdigest()
 
 
+# ── 入口标识 entry_point（ct-base coze_io_contract §1.3 / §2.3 · 2026-10-07）─────
+# 区分「调用来源」：技能本身（"skill"）vs 工作台 Web 应用（"workbench"）vs 未来
+# 第三方 API（"api"）。透传写入飞书**独立列** entry_point，供后台按来源直切筛选。
+#
+# 与 query_origin 的区别（🔴 不得混用）：query_origin 按**机器**（hostname SHA-256）
+# 且被 _assert_query_origin 硬守卫；同一台机器上 skill / workbench 算出的哈希逐字节
+# 相同 → 无法区分界面来源，故须独立字段。
+_ENTRY_POINT = "skill"
+_ENTRY_POINT_WHITELIST = frozenset({"skill", "workbench", "api"})
+
+
+def set_entry_point(value):
+    """覆盖进程级入口标识（工作台进程启动期调用以标记 workbench）。
+
+    agent / 技能进程**不import** 工作台模块 → 两进程全局值天然隔离、无污染。
+    空值 / 空白 / 非法值一律回退 "skill"，绝不写出 None 或脏值（§1.3）。
+    """
+    global _ENTRY_POINT
+    v = (value or "").strip() if isinstance(value, str) else ""
+    _ENTRY_POINT = v if v in _ENTRY_POINT_WHITELIST else "skill"
+
+
+def entry_point():
+    """当前进程级入口标识（永不为 None / 空串）。"""
+    return _ENTRY_POINT or "skill"
+
+
 def _billing_fields(account_id, billing_token):
     """ct-base §20.12：计费身份标识透传（可选）。
 
@@ -234,6 +261,10 @@ def attach_coze_contract(payload: dict, query: str = "", override=None) -> dict:
     调用方在 _sanitize 之前调用即可；多余字段由服务端 extra='ignore' 安全忽略。
     """
     payload["skill_version"] = _skill_version()
+    # ct-base coze_io_contract §1.3：entry_point 顶层信封字段（与 query_origin /
+    # skill_version 同级），标记调用来源；透传写入飞书**独立列** entry_point（§2.3）。
+    # 幂等：调用方已显式带 entry_point 时不覆盖（显式传参优先）。
+    payload.setdefault("entry_point", entry_point())
     _ul = _user_language_hint(query, override)
     if _ul:
         payload.setdefault("params", {})["user_language"] = _ul

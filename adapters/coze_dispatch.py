@@ -72,7 +72,7 @@ except Exception:  # pragma: no cover — 缺失时降级为原样外发
 
 # 可由本调度器外发的源（fail-closed：不在表内一律拒绝）
 DISPATCHABLE_SOURCES = frozenset({
-    "faers", "fda_label", "dailymed", "rxclass", "fda_recall", "hk_pv", "nmpa_pv",
+    "faers", "maude", "fda_label", "dailymed", "rxclass", "fda_recall", "hk_pv", "nmpa_pv",
 })
 
 # 这些源返回「佐证型 Evidence」结构（dailymed/rxclass/fda_recall）；
@@ -152,26 +152,88 @@ def _generic_error(source, err):
     return {"error": err, "source": source}
 
 
-# ── SSE 流式解析器（复用 ct-literature pdf_download._parse_coze_stream）────────
-def _parse_stream(resp):
-    """解析 Coze stream_run 的 SSE 流，提取检索结果 projects 列表。
+# ──SSE 流式解析器 ───────────────────────────────────────────────────────
+def _dig_output(node):
+    """从单个流式事件（workflow_end / node_end）提取 output。
 
-    优先复用 scripts/pdf_download.py 的 _parse_coze_stream（PDF 通道已验证的同源实现）；
-    导入异常时降级到本模块内置最小解析器。返回 projects(list[dict]) 或 None。
+    兼容三种嵌套形态（与 ct-literature pdf_download._dig_output 同构）：
+      - {"type": "workflow_end", "output": <...>}
+      - {"type": "workflow_end", "data": {"output": <...>}}
+      - {"type": "workflow_end", "data": {"data": {"output": <...>}}}
+    output 可为 dict 或 str（JSON 字符串，由调用方 loads）。
     """
-    try:
-        # 延迟导入：pdf_download 可能在某些环境下不可用
-        _skill_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        if _skill_root not in sys.path:
-            sys.path.insert(0, _skill_root)
-        from adapters.pdf_download import _parse_coze_stream
-        return _parse_coze_stream(resp, lambda msg: None)
-    except Exception:
-        return _parse_stream_local(resp)
+    if not isinstance(node, dict):
+        return None
+    out = node.get("output")
+    if out is None and isinstance(node.get("data"), dict):
+        out = node["data"].get("output")
+    if (out is None and isinstance(node.get("data"), dict)
+            and isinstance(node["data"].get("data"), dict)):
+        out = node["data"]["data"].get("output")
+    return out
 
 
-def _parse_stream_local(resp):
-    """最小 SSE 解析兜底（仅当无法复用 pdf_download 时启用）。"""
+def _has_real_output(o):
+    """判定某事件输出是否携带真实结果（而非空容器）。
+
+    Coze「Output 变量未绑定」时 workflow_end.output 返回空 {}，此时必须回退到
+    node_end 输出——故空 dict / 空 list 不算「有结果」。键集与 ct-literature
+    pdf_download._has_real_output 对齐（含 s3_url：回参超长外置）。
+    """
+    if isinstance(o, dict):
+        return any(k in o for k in ("projects", "project_list", "s3_url",
+                                    "status", "total_count", "counts"))
+    if isinstance(o, str):
+        try:
+            d = json.loads(o)
+        except Exception:
+            return bool(o) and "[DONE]" not in o
+        return isinstance(d, dict) and any(
+            k in d for k in ("projects", "project_list", "s3_url",
+                             "status", "total_count", "counts"))
+    if isinstance(o, list):
+        return len(o) > 0
+    return False
+
+
+def _parse_stream(resp):
+    """解析 Coze stream_run 的 SSE 流，返回最终 output 载荷（dict|list|None）。
+
+    v0.9.14 修复（双发根因）：本函数原先优先复用 ct-literature 的
+    `adapters.pdf_download._parse_coze_stream`。该依赖**必须移除**，两个原因：
+
+    ①跨技能隐式依赖 + 行为不可测。pdf_download 不在 ct-safety 技能树内
+      （`adapters/` 下无此文件），独立运行时 import 必抛 ModuleNotFoundError →
+      降级到本地解析器；但若同进程先跑过 ct-literature，其 `adapters` 包已进
+      sys.modules 缓存，import 会**成功**并静默使用 ct-literature 的实现
+      （实测：sys.path 顺序决定命中谁）。即：同一份 ct-safety 代码在不同会话
+      里走两条不同解析路径，行为不可复现。
+    ② 真缺陷：两条路径都只认「output.projects 是 list」的旧形态，而 ct-search
+      的 faers 型 output 是 `{"project_list":"<json str>","total_count":N}`
+      ——**无 projects 键** → 解析恒返回 None → dispatch 判定「流式无结果」
+      → 回退 /run 再发一次。结果：每次检索在 Coze 侧留下两条 searchlog，
+      retrieval 成本与时延翻倍。（实测：stream 43s 拿到完整 counts 却返回
+      None，随后 /run 重跑一遍。）
+
+    本实现保留 pdf_download 的两项**有效**能力（避免移除依赖造成能力回退）：
+      - node_end 回退：workflow_end.output 为空 {} 时回退到最后一个含真实
+        结果的 node_end（对应 Coze Output 变量未绑定的场景）
+      - `_dig_output` 三种嵌套形态兼容
+    不保留其s3_url 外置回拉（ct-safety 各源均不走 S3 外置，无此需求）。
+
+    返回原始 output，归一交 _stream_output_to_result → _parse_run_response，
+    与 /run 路径共用单一真相源，避免两条解析逻辑漂移。
+    """
+    return _parse_stream_output(resp)
+
+
+def _parse_stream_output(resp):
+    """SSE → 最终 output 载荷（dict|list）；无有效输出时 None。
+
+    优先级：workflow_end.output（若携带真实结果）→ 最后一个含真实结果的
+    node_end.output → 最后一个 node_end.output → 含 projects/project_list
+    的事件 → 整块 JSON（应对非 SSE 返回）。
+    """
     events = []
     buf = b""
     for chunk in resp:
@@ -191,7 +253,9 @@ def _parse_stream_local(resp):
             events.append(json.loads(buf.decode("utf-8", "ignore")))
         except Exception:
             return None
-    final = None
+
+    workflow_end_out = None
+    node_outputs = []
     for evt in events:
         if not isinstance(evt, dict):
             continue
@@ -199,11 +263,22 @@ def _parse_stream_local(resp):
         node = inner if (isinstance(inner, dict) and inner.get("type")) else evt
         etype = node.get("type") or evt.get("type")
         if etype == "workflow_end":
-            out = node.get("output")
-            if out is None and isinstance(node.get("data"), dict):
-                out = node["data"].get("output")
-            if out is not None:
-                final = out
+            workflow_end_out = _dig_output(node)
+        elif etype == "node_end":
+            o = _dig_output(node)
+            if o is not None:
+                node_outputs.append(o)
+
+    final = None
+    if _has_real_output(workflow_end_out):
+        final = workflow_end_out
+    else:
+        for o in reversed(node_outputs):
+            if _has_real_output(o):
+                final = o
+                break
+        if final is None and node_outputs:
+            final = node_outputs[-1]
     if final is None:
         for evt in reversed(events):
             if isinstance(evt, dict) and ("projects" in evt or "project_list" in evt):
@@ -216,27 +291,47 @@ def _parse_stream_local(resp):
             final = json.loads(final)
         except Exception:
             return None
-    if not isinstance(final, dict):
+    if not isinstance(final, (dict, list)):
         return None
-    projects = final.get("projects")
-    if isinstance(projects, list):
-        return projects
-    pl = final.get("project_list")
-    if pl is not None:
-        if isinstance(pl, str):
-            try:
-                pl = json.loads(pl)
-            except Exception:
-                return None
-        if isinstance(pl, dict):
-            p = pl.get("projects")
-            if isinstance(p, list):
-                return p
+    # v0.9.14：原实现在此强制提取 projects（`final["projects"]` / `final["project_list"]["projects"]`），
+    # faers 型 output 无 projects 键 → 恒 None → 误判「流式无结果」并回退 /run（双发）。
+    # 现原样返回 output，交 _stream_output_to_result 归一（与 /run 共用 _parse_run_response）。
+    return final
+
+
+def _stream_output_to_result(output, source):
+    """workflow_end.output → 本地统一格式；无法归一时返回 None（触发 /run 回退）。
+
+    与 _parse_run_response 共用同一解析器：output 顶层就带 project_list /
+    total_count（faers / fda_label / dailymed 各型），直接喂给 _parse_run_response
+    即可得到与 /run 路径**完全同构**的结果。
+
+    判定「有效载荷」用**键存在性**而非真值（v0.9.14 修正）：稀疏 2×2（a=0）
+    与上游 openFDA 报错都会让 counts/total_count 为空或None，若按真值判断会
+    把合法结果误判为「无结果」→ 又触发一次 /run，双发重现。Coze 侧只要回过
+    结构化 output（带 project_list / total_count / counts 任一键）即视为有效，
+    由 _parse_run_response 忠实还原（含 counts=None 的错误态）。
+
+    返回 None 仅表示「流式确实没给出结构化 output」（Output 未绑定、被
+    rejected、响应非 SSE），此时回退 /run —— 这是设计意图，不是 bug。
+    """
+    if output is None:
+        return None
+    # 旧形态：output 本身就是 projects 列表
+    if isinstance(output, list):
+        return _projects_to_result(output, source)
+    if isinstance(output, dict):
+        # 结构化 output 的标志键（与 _has_real_output 同源，再加 counts）
+        if any(k in output for k in ("projects", "project_list", "counts",
+                                     "total_count", "s3_url", "status",
+                                     "n_results", "record_count", "records",
+                                     "labeled")):
+            return _parse_run_response(dict(output), source)
     return None
 
 
 def _coze_stream_once(body, timeout):
-    """单次 /stream_run 请求 + SSE 解析；返回 projects(list) 或 None（无结果/被拒），异常上抛。"""
+    """单次 /stream_run 请求 + SSE 解析；返回 workflow_end.output（dict|list）或 None，异常上抛。"""
     req = urllib.request.Request(CT_SEARCH_ENDPOINT_STREAM, data=body,
                                  headers=_stream_headers(), method="POST")
     with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -339,13 +434,14 @@ def dispatch(source, drug, event=None, date_from=None, date_to=None,
     # HTTP POST to Coze —— 主路径 /stream_run（SSE 流式），回退 /run
     body = json.dumps(_sanitize(payload), ensure_ascii=False).encode("utf-8")
     try:
-        projects = _coze_stream_once(body, timeout)
-        if projects is not None:
-            result = _projects_to_result(projects, source)
-            _maybe_write_out(out, result)
-            return result
-        # 流式无结果（workflow Output 未绑定 / 被 rejected）→ 回退 /run
-        print("[coze-dispatch][%s] /stream_run 无结果，回退 /run" % source,
+        output = _coze_stream_once(body, timeout)
+        if output is not None:
+            result = _stream_output_to_result(output, source)
+            if result is not None:
+                _maybe_write_out(out, result)
+                return result
+        # 流式确无有效 output（workflow Output 未绑定 / 被 rejected）→ 回退 /run
+        print("[coze-dispatch][%s] /stream_run 无有效结果，回退 /run" % source,
               file=sys.stderr)
     except urllib.error.HTTPError as e:
         err_body = e.read().decode("utf-8", errors="replace") if e.fp else ""
@@ -427,11 +523,13 @@ def _parse_run_response(data, source):
             "total_count": tc,
         }
         # 透传新格式计数字段
+        # v0.9.14：增传 error——Coze 侧上游 openFDA 报错时（如500）会在 pl 里放
+        # error 键；不透传则错误被静默吞成 counts=None，调用方误以为「无信号」。
         for _k in ("counts", "top_events", "drug_total", "event_total",
                    "grand_total", "drug", "api", "field",
                    "n_results", "adverse_reactions", "warnings",
                    "labeled", "detail", "records", "record_count",
-                   "matched_drug_terms", "query"):
+                   "matched_drug_terms", "query", "error"):
             if _k in pl:
                 result[_k] = pl[_k]
         return result
@@ -519,6 +617,31 @@ class FaersShim:
 
     def __getattr__(self, name):
         # 其它属性（如模块级常量）透明转发到真实模块
+        return getattr(self._real, name)
+
+
+class DeviceEventShim:
+    """MAUDE（医疗器械不良事件）薄垫片：fetch_counts → Coze source='maude'。
+
+    与 FaersShim 完全同构：器械计数同样经统一 Coze 端点（单一出口，与 ct-base
+    §6 一致），本地不新增直连出口。真实模块 fetch_faers 需支持 source='maude'
+    （device/event.json + patient.device.brand_name）。Coze 侧需部署对应
+    maude 节点后计数才会返回真实数据（未部署时 dispatch 报错，由上层提示）。
+    其余方法透明转发（fetch_case_reports 等仍走真实模块的本机直连例外）。
+    """
+
+    def __init__(self, real):
+        self._real = real
+        self._date_clause = real._date_clause
+
+    def fetch_counts(self, drug, event=None, field=None, top=10, api_key=None,
+                     run=False, out=None, date_from=None, date_to=None,
+                     timeout=120, retries=3):
+        # Coze maude 节点用器械默认维度；忽略本地 field/api_key/retries
+        return dispatch("maude", drug, event, date_from=date_from, date_to=date_to,
+                        run=run, out=out, timeout=max(int(timeout), 120))
+
+    def __getattr__(self, name):
         return getattr(self._real, name)
 
 

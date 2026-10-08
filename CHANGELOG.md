@@ -1,5 +1,100 @@
 # Changelog — ct-safety
 
+## v0.10.0 — 2026-10-08 · OMOP CDM + HADES RWE 扩展参考
+
+> 基于《临床试验Skill推荐》分析，新增 OMOP CDM 和 HADES 作为 RWE 方向扩展参考。
+
+- **Data Sources 新增 RWE 扩展参考表格**：列出 OMOP CDM（统一数据模型）和 HADES（RWE 分析工具栈）
+- **边界说明**：ct-safety 当前聚焦 FAERS 信号检测。OMOP CDM + HADES 作为远期扩展参考，不与现有 FAERS 定量分析耦合
+
+## v0.9.15 — 2026-10-07 · 接入 `entry_point` 调用来源标记（ct-base coze_io_contract §1.3 / §2.3）
+
+> 飞书 searchlog 新增 `entry_point` 独立列，用于按**调用来源**（技能本身 / 工作台 Web 应用 / 未来第三方 API）直切筛选。本技能此前未发送该字段，现按契约补齐。
+
+- **`adapters/nmpa_coze.py`**：新增模块级 `_ENTRY_POINT = "skill"` + `set_entry_point(v)` + `entry_point()`（枚举白名单 `skill`/`workbench`/`api`；空值 / 空白 / 非法值一律回退 `"skill"`，绝不写 `None` 或脏值）；`attach_coze_contract()` 在**顶层信封**注入 `"entry_point"`（与 `query_origin` / `skill_version` 同级）。
+- **单点注入**：`attach_coze_contract` 是 ct-safety 全部出站路径（`coze_dispatch.dispatch` 的 faers / maude / fda_label / dailymed / rxclass / fda_recall / hk_pv / nmpa_pv 八源）的统一信封装配点，故一处改动即全源覆盖，无需逐源改。
+- **用 `setdefault` 而非直接赋值**：显式传参优先 + 幂等（重复调用不叠加、不覆盖调用方已设的值）。
+- **与 `query_origin` 正交（🔴 不得混用）**：`query_origin` 按机器（硬件绑定 SHA-256），同一台机器上 skill 与 workbench 哈希逐字节相同 → 无法区分界面来源。
+- **未并入 `querystr` / `resultstr`**（§2.3 硬约束）：`querystr` 审计列已实测不含该键；只作顶层信封由 coze 端分流到飞书独立列。
+- **同步**：`workbench/adapters/nmpa_coze.py` 与主文件逐字节一致。
+- **验证**：真实端点 `dispatch('faers', ...)` 出站 payload 带 `entry_point='skill'`，coze 端未报错（`extra='ignore'` 兜底）；白名单/回退/幂等/隔离 4 项语义实测通过；跨技能契约回归 `ct-base/scripts/tests/test_entry_point.py`（E1–E9 全通过）。
+
+> ⚠️ 落地前提（§2.3 部署铁律）：**飞书列须先于新coze 代码存在**。当前 coze 侧 `feishu_write_node`尚未写 `entry_point` 键，故该列会留空（安全方向：旧 coze + 新表 = 不报错）。待 coze 侧按 §2.3 补齐（`state.py` 显式声明 + `feishu_save_node` 透传 + `write_feishu_log` 加形参）后本列即自动落值。
+
+## v0.9.14 — 2026-10-07 · 修复 Coze 检索「每次双发」（飞书 searchlog 高频重复调用根因）
+
+> 现象：飞书后台 searchlog 记录 ct-safety 单次检索留下**两条**完全相同的
+> querystr/resultstr（间隔 ≈ 前一次 runtime_sec）。7 个 drug-event 对各重复
+> 4–8 次，35 行日志实为 18 次逻辑检索。
+
+**为什么必须移除 `pdf_download` 依赖（两个独立原因，均实测）**
+
+1. **行为不可复现**。`adapters/pdf_download.py` 是 ct-literature 私有模块，不在 ct-safety 技能树内。独立运行 → `ModuleNotFoundError` 降级（无害）；但若同进程先跑过 ct-literature，其 `adapters` 包已进入 `sys.modules` 缓存，**import 会成功**并静默使用 ct-literature 的实现（实测：命中哪个取决于 `sys.path` 顺序）。即同一份 ct-safety 代码在不同会话走两条不同解析路径。
+2. **双发根因就在这里**。两条路径都只认「`output.projects` 是 list」的旧形态，而 ct-search 的 faers 型 output 是 `{"project_list":"<json str>","total_count":N}`——**无 projects 键** → 解析恒返回 None → `dispatch()` 误判「流式无结果」→ 回退 `/run` 再发一次。（实测污染路径下同样返回 None、同样双发。）
+
+**移除依赖时保留的能力（避免能力回退）**
+
+原实现有两项**有效**能力，本地版一并吸收，不是简单删掉：
+
+| 能力 | 说明 | 保留位置 |
+|---|---|---|
+| `node_end` 回退 | Coze「Output 变量未绑定」时 `workflow_end.output` 为 `{}`，真结果在 `node_end` | `_parse_stream_output` + `_has_real_output`（实测 a=7 正确取回） |
+| `_dig_output` 三种嵌套形态 | `output` / `data.output` / `data.data.output` | `_dig_output()`（ct-literature 同构） |
+| ~~`s3_url` 外置回拉~~ | ct-safety 各源均不走 S3 外置，无此需求 | **有意不移植** |
+
+**顺带修掉的两个隐性缺陷**
+
+- **有效载荷误判**：`_stream_output_to_result` 原按**真值**判有效载荷，当 `counts=None`（上游 openFDA 报错，Coze 在 `pl` 里只放 `error` 键）时会被判为「无结果」→ 又触发 `/run` → **双发重现**。改为按**键存在性**判定（`projects`/`project_list`/`counts`/`total_count`/`s3_url`/`status`/`n_results`/`record_count`/`records`/`labeled` 任一存在即有效）。
+  - 注：稀疏 2×2（`a=0`、`total_count=0`）实测**不受影响**——`counts` 是非空 dict `{'a':0,...}`，真值为 True。真正的触发条件是 `counts=None`，即上游报错态。
+- **上游错误被静默吞掉**：`_parse_run_response` 的透传白名单漏了 `error` 键，Coze 侧 openFDA 500 时 `pl.error` 被丢弃、结果静默变成 `counts=None`，调用方误以为「无信号」。已加入透传。（实测捕获真实 500：`leflunomide/HEPATIC FAILURE` → `error='500 Server Error...'`，不再静默变空。）
+
+**验证**
+- 真实端点：`leflunomide/HEPATIC FAILURE`、`ibuprofen/PNEUMONITIS` 均 `stream_run=1, /run=0`；后者 a=215 正常返回（前者恰逢 openFDA 真实 500，`error` 已如实透传，不再静默）。
+- 修复前实测：stream 耗时 22–43s、拿回完整 `counts` 却返回 `None` → 随后 `/run` 重跑，**Coze 侧 2 条记录**。
+- `py_compile` 过；`tests/double_fetch_test.py` **11/11 RC=0**（D1a/D1b faers 型解析与 chunk 边界 · D2a/D2b 单次外发与真回退 · D3a/D3b 旧形态与跨源 · D4 无跨技能 import · **D5 node_end 回退** · D6 三种嵌套 · D7 判空 · **D8 稀疏/错误态不误判**）；`tests/mode_b_test.py` 10/10 RC=0。
+
+**同步**：`workbench/adapters/coze_dispatch.py` 与 `adapters/` 逐字节一致（workbench 副本此前还停留在 v0.9.12，缺 `maude`，一并对齐）。
+**回归**：`py_compile` 过；离线重放覆盖 faers 型 output / 旧 projects-list 形态 / 无 output 回退三例；`tests/mode_b_test.py` RC=0。
+
+> ⚠️ 注：本次仅修本地客户端解析，**未改动 Coze 侧**。若后续 Coze 工作流 Output 结构再变，`_stream_output_to_result()` 会退回 None 并回退 `/run`（退化为旧行为，不会静默返回错数据）。
+>
+> ⚠️ 上游 openFDA（api.fda.gov）存在偶发 500（实测 2026-10-07 21:06）。现错误经 `error` 键如实透传给调用方，不再静默变成「无信号」；是否重试由调用方决定。
+
+## v0.9.13 — 2026-10-07 · 器械不良事件（MAUDE）支持 [本地侧就绪·待 Coze 部署]
+
+> 落实ct-update 升级项 G：器械不良事件纳入药物警戒范围。**方案 B（单一出口）**——器械计数同样经 Coze 统一端点（`source='maude'`），本地不新增直连出口。
+
+- `adapters/fetch_faers.py`：新增 `BASE_DEVICE`（openFDA `device/event.json`）与 `SOURCE_DEFAULTS` 注册表（`faers`/`maude`）；`_get_json` 支持传入端点；`fetch_counts` 支持 `source=` 切换（默认 `faers`，**FAERS 行为零变化**），返回体 `source`/`api` 随来源变化（FAERS 保持原字符串 `openFDA drug/event.json` 不变）。
+- `adapters/coze_dispatch.py`：`DISPATCHABLE_SOURCES` 新增 `maude`；新增 `DeviceEventShim`（与 `FaersShim` 完全同构，counts 走 `dispatch('maude', ...)`）。
+- `scripts/ct_safety.py`：新增 `--device` 开关（切换 `DeviceEventShim` + 器械默认维度 `patient.device.brand_name`；显式 `--field` 优先）。
+- 2×2 组装与 `disproportionality.compute`（PRR/ROR/IC/EBGM）**完全复用**，未改动任何统计逻辑。
+- ⚠️ **上线前置**：需在 Coze 控制台部署 `maude` 节点（AI 不触碰 `adapters/coze/`），部署后 `--device` 才返回真实器械数据；未部署时 dispatch 报错。
+- 验证：`py_compile` 过；离线单测（FAERS 默认不变、preview 不触网、`DeviceEventShim`→`dispatch('maude')` 路由）；回归 `tests/mode_b_test.py`、`tests/mode_c_test.py` 均 RC=0。
+
+## v0.9.12 — 2026-10-06 · 工作台安全加固：路径黑名单（P3）
+
+> 已发布工作台应用（`ct-safety.app.workbuddy.host`）安全加固，阻止通过 HTTP 直接访问敏感目录/文件。
+
+- **`workbench/server.py`**：新增 `_STATIC_PATH_BLOCKED` 路径黑名单（`adapters`, `runs`, `scripts`, `out`, `_bugreports`），非白名单路径返回 403 `forbidden path`。
+- **影响**：`adapters/config.json`（端点 URL）、`runs/*.json`（历史数据）、`scripts/*.py`（已被 P0 拦截）无法通过 HTTP 直接访问；`/api/runs` 等端点不受影响（走独立路由，不经过 `_static()`）。
+- **回归**：`curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8791/../adapters/config.json` → 403；`curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8791/../runs/20260926-100844-6668/faers_fetch.json` → 403。
+
+## v0.9.11 — 2026-10-06 · 工作台安全加固：静态文件白名单（P0）
+
+> 已发布工作台应用（`ct-safety.app.workbuddy.host`）安全加固，阻止源码/凭据被 HTTP 下载。
+
+- **`workbench/server.py`**：`_static()` 新增 `_STATIC_ALLOWED` 扩展名白名单（12 种：css/js/svg/png/ico/json/woff/woff2/ttf/map/html/htm），非白名单扩展名返回 403 `forbidden type`。
+- **影响**：`.py` / `.env` 等源码/凭据文件无法通过 HTTP 下载；前端静态资源不受影响。
+- **回归**：`curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8791/../scripts/ct_safety.py` → 403。
+
+## v0.9.10 — 2026-09-27 · 工作台对齐 ct-base 规范（config 契约 + 运行形态 + 组件同步）
+
+- **新增 `workbench/workbench.config.json`**：此前缺失、server.py 的 `/api/config` 只能回退 `{"skill":"ct-safety"}`。现按 `ct-base/workbench/workbench.config.schema.json` 补全契约（skill/title/theme/backend.mode=api,port=8791,mockEnv=CT_SAFETY_MOCK/modules[3 标准区]/lists[history]/i18n/bugReport/quality），schema 校验通过；与内嵌 `#wb-config` 单一来源对齐。
+- **修正 `workbench/app.config.json` 运行形态**：原 `deployedAs=static-site` + `startCmd=python -m http.server` 与真实后端（server.py 提供 /api/*）不一致 → 改为 `deployedAs=http-service`、`startCmd=python workbench/server.py --host 0.0.0.0 --port $PORT`、`appName` 对齐 `title.en`（ct-safety Signal Workbench）。
+- **`workbench/index.html`**：补 `<link rel="icon" href="./icon.svg">`（此前由 app.py 运行时注入，现直接落盘，app.py 注入逻辑幂等保持）；内嵌 `#wb-config` 的 modules 收敛为 3 个标准区并补 `lists[]`，与文件版一致；修正顶部过时注释（原「无 HTTP 服务 / 静态演示壳」已不实）。
+- **同步 `workbench/wb-list.js`** 至 ct-base 规范版：补齐检索输入 debounce 防抖（标准 ⑤），API 不变。
+- `py_compile server.py/app.py` 与 `node --check wb-list.js` 均通过。
+
 ## v0.9.9 — 2026-09-07 · 全检索上 Coze + 移除本地降级路径 + 合规整改（轻本地端架构完成）
 
 - **移除所有本地降级路径（`--offline` / `OFFLINE` 模式删除）**：`ct_safety.py`、`corroborative_sources.py`、`coze_dispatch.py` 全部移除 `--offline` 参数和 `OFFLINE` 全局变量。所有检索（faers / fda_label / dailymed / rxclass / fda_recall / hk_pv / cn_pv / nmpa_pv）一律外发 Coze 统一端点 `ct-search.coze.site`，本地仅保留计算（disproportionality / signal_score / check_event）和辅助直连（query_total / fetch_case_reports）。

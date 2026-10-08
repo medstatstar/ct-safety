@@ -60,6 +60,18 @@ else:
     print("[ct_safety] 检索后端：coze_dispatch 不可用（部分功能受限）")
 
 
+def enable_device_mode():
+    """切换到 MAUDE（医疗器械不良事件）来源：把 fetch_faers 换成 DeviceEventShim。
+
+    器械计数同样经 Coze 统一端点（source='maude'），本地不新增直连出口；2x2
+    结构与 FAERS 同构，下游不均衡计算无需改动。需 Coze 侧已部署 maude 节点。
+    """
+    global fetch_faers
+    real = getattr(fetch_faers, "_real", fetch_faers)
+    fetch_faers = coze_dispatch.DeviceEventShim(real)
+    return fetch_faers
+
+
 def _render_top_events(data, drug, cn_pv=None):
     """Top-events-only report when no --event is supplied (no 2x2 disproportionality)."""
     drug_total = data.get("drug_total")
@@ -1167,6 +1179,10 @@ def main():
                     help="target drug (MedDRA/INN; openFDA medicinalproduct form)")
     ap.add_argument("--event")
     ap.add_argument("--field", default="patient.drug.medicinalproduct")
+    ap.add_argument("--device", action="store_true",
+                    help="target MAUDE device adverse events instead of FAERS "
+                         "(器械不良事件；经 Coze source='maude'，需 Coze 侧已部署 maude 节点；"
+                         "默认维度字段切换为 patient.device.brand_name)")
     ap.add_argument("--top", type=int, default=10)
     ap.add_argument("--api-key", help="openFDA API key (raises quota to 120k/day). "
                                         "Also read from env OPENFDA_API_KEY or skill-root .env (git-ignored). "
@@ -1182,6 +1198,15 @@ def main():
     ap.add_argument("--validate-controls", action="store_true",
                     help="run positive/negative control pairs to self-check the "
                          "detection pipeline (ignores --drug/--event)")
+    # upgrade E (2026-09-29): user-supplied SOC map + external control benchmark
+    ap.add_argument("--soc-map", default=None,
+                    help="upgrade E: user PT→SOC extension file (JSON/CSV) merged over "
+                         "the built-in dictionary; also honors env CT_SAFETY_SOC_MAP. "
+                         "Sponsor's own licensed MedDRA mapping — never bundled.")
+    ap.add_argument("--control-pairs", default=None,
+                    help="upgrade E: external benchmark control-pairs file (JSON/CSV) "
+                         "merged into the --validate-controls positive/negative set "
+                         "(used with --validate-controls).")
     # #5: temporal anomaly detection (quarterly reporting-count jump)
     ap.add_argument("--trend", action="store_true",
                     help="detect temporal anomaly (quarterly reporting-count jump) "
@@ -1274,6 +1299,34 @@ def main():
     ap.add_argument("--psur-period", default=None,
                     help="P1-F: PSUR 报告期间标签（如 2025-Q1 / 2026H1）")
     args = ap.parse_args()
+
+    # 器械不良事件（MAUDE）模式：切换到 DeviceEventShim + 器械默认维度字段。
+    # 仅当用户未显式传 --field 时才改默认字段（显式 --field 优先）。
+    if getattr(args, "device", False):
+        if not _COZE_DISPATCH_OK:
+            sys.exit("[错误] --device 依赖统一出口(coze_dispatch)以路由 source='maude'；"
+                     "当前不可用。请检查 ct-safety/adapters/coze_dispatch.py 与端点配置。")
+        enable_device_mode()
+        if args.field == "patient.drug.medicinalproduct":
+            args.field = "patient.device.brand_name"
+        print("[ct-safety] 模式：MAUDE 器械不良事件（source=maude，维度=%s）" % args.field)
+
+    # upgrade E: apply user SOC map (CLI --soc-map wins over env), before any
+    # map_soc() call downstream; and merge external control benchmark pairs.
+    try:
+        if getattr(args, "soc_map", None):
+            n = disproportionality.load_user_soc_map(args.soc_map)
+            print("[OK] user SOC map merged: %d entries" % n)
+        else:
+            n = disproportionality.init_soc_map_from_env()
+            if n:
+                print("[OK] user SOC map merged (env CT_SAFETY_SOC_MAP): %d entries" % n)
+        if getattr(args, "control_pairs", None):
+            added = disproportionality.load_control_pairs(args.control_pairs)
+            print("[OK] external control pairs merged: positive+%s negative+%s"
+                  % (added["positive"], added["negative"]))
+    except Exception as _e:  # noqa: BLE001 - extension must never break the run
+        print("[WARN] upgrade-E extension not applied: %s" % _e)
 
     # --validate-controls runs independently of any specific drug/event
     if args.validate_controls:
