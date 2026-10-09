@@ -117,7 +117,7 @@ def _translate_drug(drug):
     """
     if not drug or _dnr_is_non_ascii is None or not _dnr_is_non_ascii(drug):
         return drug, False
-    eng, translated = _dnr_resolve(drug, auto=True)
+    eng, translated = _dnr_resolve(drug)
     if eng and eng.strip() and eng != drug:
         return eng, translated
     return drug, False

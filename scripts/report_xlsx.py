@@ -557,9 +557,9 @@ def _build_score(wb, fmts, score_res):
 # ════════════════════════════════════════════════════════════════════
 def build_signal_xlsx(out_path, *, drug, event, fetch_data, disp_res=None,
                       cn_pv=None, label_data=None, label_status=None,
-                      score_res=None):
-    # Ensure i18n is in the right language (auto-detect OS locale)
-    set_lang("zh" if sys.platform == "win32" else None)
+                      score_res=None, lang=None):
+    # Ensure i18n is in the right language (auto-detect OS locale if not specified)
+    set_lang(lang if lang else ("zh" if sys.platform == "win32" else None))
 
     wb = xlsxwriter.Workbook(out_path, {"in_memory": True})
     fmts = make_formats(wb, PAL)

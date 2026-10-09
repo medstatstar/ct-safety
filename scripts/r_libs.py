@@ -1,31 +1,36 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-r_libs.py -- validation / sanitization helpers for the ct- skill library.
+r_libs.py -- shared R execution / validation / sanitization layer for the ct- skill library.
 
-IMPORTANT (architectural decision, 2026-08-08):
-  This SHARED base module does NOT contain an R code-execution primitive.
-  Executing R (`run_r`) is intentionally NOT part of the shared base -- each
-  skill that genuinely needs R execution carries its OWN scoped runner (copied
-  from a prior template) with its own `confirmed` gate, allowlist validation
-  and output sanitization. A general "execute arbitrary R" function is never
-  propagated from the base into every skill (including pure-Python skills that
-  have no business running R).
+Provides generic, security-hardened helpers that EVERY R-backed ct- skill reuses:
 
-This module provides reusable defensive helpers only:
   - find_rscript() / is_valid_rscript()
         Locate the Rscript binary and verify it is genuinely Rscript (prevents
-        binary substitution). Used only by skills that opt into R execution.
+        binary substitution / RCE via a swapped executable).
   - _validate_token() / _safe_r_path_literal()
         Allowlist validation of every user string that reaches generated R, so a
         user value can NEVER break out of an R string literal and inject code.
   - sanitize_output()
         Strip file paths and truncate before any output is shown to the user.
+  - run_r(code, confirmed=False, preamble="")
+        Execute R safely. OFF by default (returns a dry-run notice); opt in with
+        confirmed=True. `preamble` lets a business skill inline its own domain R
+        source (e.g. a localization helper) ahead of the generated code.
+
+This module is intentionally business-agnostic. Domain-specific R source strings
+(sample-size engines, i18n.R, adaptive-trial simulators, ...) live in each ct-
+skill (e.g. ct-samplesize), NEVER here -- so a freshly copied skill starts clean.
 """
 
 import os
 import re
+import sys
 import textwrap
+import subprocess
+import tempfile
+
+from i18n import t
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -66,9 +71,9 @@ def find_rscript():
 def is_valid_rscript(path):
     """Ensure the resolved executable is genuinely Rscript (prevent binary substitution).
 
-    The caller runs generated R code via subprocess, so we must guarantee the
-    binary we invoke is the real Rscript, not an attacker-supplied executable,
-    and that it is actually executable.
+    Audit hardening: the caller runs generated R code via subprocess, so we must
+    guarantee the binary we invoke is the real Rscript, not an attacker-supplied
+    executable, and that it is actually executable.
     """
     if not path or not os.path.isfile(path):
         return False
@@ -127,3 +132,70 @@ def sanitize_output(raw, max_lines=200, max_col=200):
         if len(l) > max_col else l for l in lines
     ]
     return '\n'.join(lines)
+
+
+def run_r(code, confirmed=False, preamble=""):
+    """Execute R `code` (OFF by default) or return a safe-preview message.
+
+    Args:
+        code: R source to run.
+        confirmed: when False, returns a dry-run notice and does NOT execute.
+            Set True to actually run (the --yes / safe-preview opt-in pattern).
+        preamble: optional R source prepended before `code` (e.g. a business
+            skill's inlined localization helper). Kept empty in this base layer;
+            domain strings are passed by the calling skill, not stored here.
+
+    Returns:
+        Localized stdout/stderr (sanitized), or a localized notice string.
+    """
+    if not confirmed:
+        return t("dry_run.not_executed")
+    rscript = find_rscript()
+    if not is_valid_rscript(rscript):
+        return t("error.rscript_not_found")
+
+    # RCE prevention: user strings are allowlist-validated before they reach
+    # generated R (see _validate_token / _safe_r_path_literal); the generated
+    # code therefore cannot contain sandbox-escape tokens.
+
+    # Neutralize any leftover source() placeholder from a business template
+    # (publishing strips .R files, so the inline `preamble` must supply it).
+    code = code.replace('source(file.path("{scriptdir}", "i18n.R"))', '# i18n.R inlined')
+
+    # Use the system temp dir so no residue is left if the process is killed.
+    tmp_dir = os.path.realpath(tempfile.gettempdir())
+    body = "options(echo = FALSE)\n"
+    if preamble:
+        body += preamble + "\n"
+    body += code
+    with tempfile.NamedTemporaryFile(
+        suffix='.R', mode='w', delete=False, encoding='utf-8', dir=tmp_dir
+    ) as f:
+        f.write(body)
+        tmp = f.name
+
+    # Containment: the script must live inside the system temp dir.
+    if os.path.dirname(os.path.realpath(tmp)) != tmp_dir:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return t("error.invalid_temp_path")
+
+    # NOTE: invoked as a list (no shell), so no command/shell injection is possible.
+    try:
+        proc = subprocess.run(
+            [rscript, '--vanilla', tmp],
+            capture_output=True, text=True, timeout=300
+        )
+        raw = (proc.stdout or '') + (proc.stderr or '')
+        return sanitize_output(raw)
+    except subprocess.TimeoutExpired:
+        return t("error.r_timeout")
+    except Exception as e:
+        return t("error.exec_failed", name=type(e).__name__)
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass

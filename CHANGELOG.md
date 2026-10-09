@@ -6,6 +6,10 @@
 
 - **Data Sources 新增 RWE 扩展参考表格**：列出 OMOP CDM（统一数据模型）和 HADES（RWE 分析工具栈）
 - **边界说明**：ct-safety 当前聚焦 FAERS 信号检测。OMOP CDM + HADES 作为远期扩展参考，不与现有 FAERS 定量分析耦合
+- **发布前检查整改（2026-10-09，ct-base §16）**：
+  - **README 中英文版按 ct-base §13.15 统一改造**：删除已发布应用工作台链接与相关表述，插入「不安装也能用 / Works without installation」统一入口文本（指向 `https://ct.medstatstar.com`），FAQ 同步改写
+  - **SKILL.md 瘦身 208 → 198 行**（§16.1 ≤200 红线）：Published Application 表压缩、Re-publish rule 压行、RWE 参考表格转列表；MAUDE 与 RWE 段落英文化（§4 正文一律英文，spec_lint F19 清零）
+  - **共享件同步（§16.8）**：i18n.py / kw_localize.py / r_libs.py / office_to_md.py / kw_lexicon.json / term_map.json 从 ct-base 真源覆盖同步（叶子落后，含 drug_en2zh 新药词条与 term_map 356 key 补齐），shared_sync_check 复跑一致
 
 ## v0.9.15 — 2026-10-07 · 接入 `entry_point` 调用来源标记（ct-base coze_io_contract §1.3 / §2.3）
 

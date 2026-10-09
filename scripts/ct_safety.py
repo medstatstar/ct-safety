@@ -144,7 +144,8 @@ def run(drug, event, field, top, api_key, out_dir, with_cn_pv=False,
         case_level=0, resolve_drug_name=True, with_causality=False,
         naranjo_evidence=None, verify_signal=False, code_verbatim=None,
         prioritize=False, psur=False, psur_period=None,
-        case_dedup=True, dedup_jaccard=0.8, drop_suspected_dupes=False):
+        case_dedup=True, dedup_jaccard=0.8, drop_suspected_dupes=False,
+        lang="zh"):
     # 预处理：非 ASCII 药物名 → 英文标准名（CLI 菜单确认）
     if resolve_drug_name and drug_name_resolver.is_non_ascii(drug):
         resolved, _ = drug_name_resolver.resolve(drug, event=event, auto=True)
@@ -467,7 +468,8 @@ def run(drug, event, field, top, api_key, out_dir, with_cn_pv=False,
             cn_pv=cn_pv,
             label_data=label_data if (with_fda_label and res is not None and event) else None,
             label_status=label_status if (with_fda_label and res is not None and event) else None,
-            score_res=score_res if (res is not None and event and with_fda_label) else None)
+            score_res=score_res if (res is not None and event and with_fda_label) else None,
+            lang=lang)
         print("[OK] xlsx workbook ->", xlsx_out)
     except Exception as e:  # noqa: BLE001 - XLSX is a best-effort companion output
         print("[WARN] xlsx render failed (html/md still written): %s" % e)
@@ -1298,6 +1300,9 @@ def main():
                     help="P1-F: 由检测到的信号自动生成 PSUR/PBRER Markdown 报告（psur.md）")
     ap.add_argument("--psur-period", default=None,
                     help="P1-F: PSUR 报告期间标签（如 2025-Q1 / 2026H1）")
+    ap.add_argument("--lang", default="zh",
+                    help="Report language: zh (default, Chinese UI) or en (English UI). "
+                         "Workbench passes user's language preference; CLI defaults to zh.")
     args = ap.parse_args()
 
     # 器械不良事件（MAUDE）模式：切换到 DeviceEventShim + 器械默认维度字段。
@@ -1364,7 +1369,8 @@ def main():
         verify_signal=args.verify_signal, code_verbatim=args.code_verbatim,
         prioritize=args.prioritize, psur=args.psur, psur_period=args.psur_period,
         case_dedup=not args.no_case_dedup, dedup_jaccard=args.dedup_jaccard,
-        drop_suspected_dupes=args.drop_suspected_dupes)
+        drop_suspected_dupes=args.drop_suspected_dupes,
+        lang=args.lang)
 
 
 if __name__ == "__main__":

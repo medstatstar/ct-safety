@@ -54,17 +54,10 @@ Family standard: `ct-base/references/continuity.md` (pattern A). Echo the block 
 
 | Item | Value |
 |---|---|
-| Share link | `https://ct-safety.app.workbuddy.host/` |
-| appId | `wbapp_GyOm0cdJ1qHoaQxlFZOVwl` |
-| domainPrefix | `ct-safety` |
-| Deploy metadata | `workbench/app.config.json` |
-| Deployed as | Static site (`python -m http.server $PORT --bind 0.0.0.0`) |
-| Payload | `WorkBuddy/2026-09-14-14-39-40/deploy_cs/static/index.html` (built from the ct-registry shell via `deploy_cs/build.py`; hand-patched since — rebuild FAILs on a drifted const-block rule) |
+| Share link | `https://ct-safety.app.workbuddy.host/` (domainPrefix `ct-safety`) |
+| appId | `wbapp_GyOm0cdJ1qHoaQxlFZOVwl` · deploy metadata: `workbench/app.config.json` |
 
-> **Re-publish rule**: always overwrite with the existing `appId` — the link must stay
-> `https://ct-safety.app.workbuddy.host/`. Never `createNewApp`. After deploy, assert the returned
-> `shareLink` equals the expected URL (see ct-base §13.5 dirty-binding red line). Last republished
-> 2026-09-26 (feedback two-stage fix).
+> **Re-publish rule**: always overwrite with the existing `appId` — never `createNewApp`; after deploy, assert the returned `shareLink` equals the expected URL (ct-base §13.5 dirty-binding red line). Last republished 2026-09-26.
 
 > Safe by default: **overview-first**. Step 1 (overview) runs automatically; Step 2 (detailed retrieval) runs ONLY after the user explicitly confirms.
 >
@@ -93,20 +86,17 @@ Two categories — **quantitative** (2×2 disproportionality) and **corroborativ
 | Category | Source | Access | Status |
 |---|---|---|---|
 | Quantitative | FDA FAERS (`drug/event.json`) | Thin local client (Coze unified endpoint `ct-search.coze.site`). `query_total` / `fetch_case_reports` always local-direct (structured state cannot round-trip through Coze) | Required (A-tier) |
-| Quantitative | **MAUDE 器械不良事件 (`device/event.json`)** — `--device` | Same thin-client single-egress via Coze (`source='maude'`). Device dimension defaults to `patient.device.brand_name`; 2×2 & disproportionality reused unchanged | Optional (需 Coze 侧已部署 `maude` 节点) |
+| Quantitative | **MAUDE device adverse events (`device/event.json`)** — `--device` | Same thin-client single-egress via Coze (`source='maude'`). Device dimension defaults to `patient.device.brand_name`; 2×2 & disproportionality reused unchanged | Optional (requires Coze-side `maude` node deployment) |
 | Quantitative | FDA Label (`drug/label.json`) | Thin local client (Coze unified endpoint). `check_event` local-only | Optional `--with-fda-label` |
 | Corroborative | DailyMed SPL · RxClass MED-RT · openFDA Enforcement | Thin local client (Coze unified endpoint) | Optional `corroborative_sources.py` |
 | Qualitative | cdr-adr.org.cn | Thin local client (Coze `nmpa_pv` node; local keeps keyword expansion + evidence grading + cache) | Optional `--with-cn-pv` |
 | Qualitative (CN add-on) | drugoffice.gov.hk (HK ADR Alerts) | Thin local client (Coze `hk_pv` node) | Coze node written; after deployment |
 
-## RWE 扩展参考（v0.10.0 · OMOP CDM + HADES 方法链）
+## RWE Extension References (v0.10.0 · OMOP CDM + HADES)
 
-| 工具 | 来源 | 用途 | 接入方式 |
-|---|---|---|---|
-| **OMOP CDM** (OHDSI) | `github.com/OHDSI/CommonDataModel` | 通用数据模型：从仓库取对应版本 DDL 脚本在 PostgreSQL/Snowflake 建库，把医院 HIS、医保或注册登记数据 ETL 成标准表，之后所有 RWE 分析脚本可跨数据源通用 | RWE 远期扩展——统一数据模型层 |
-| **HADES** (OHDSI) | `github.com/OHDSI/Hades` | RWE 分析工具栈：CohortMethod 做倾向性评分匹配，CohortDiagnostics 出队列质量诊断报告 | RWE 远期扩展——方法学引用 |
-
-> **边界**：ct-safety 当前聚焦 FAERS 信号检测。OMOP CDM + HADES 作为 RWE 方向的远期扩展参考，不与现有 FAERS 定量分析耦合。
+- **OMOP CDM** (OHDSI, `github.com/OHDSI/CommonDataModel`) — unified data model layer: build PostgreSQL/Snowflake from versioned DDL, ETL HIS / claims / registry data into standard tables so RWE analysis scripts stay source-agnostic.
+- **HADES** (OHDSI, `github.com/OHDSI/Hades`) — RWE analysis tool stack: CohortMethod (propensity-score matching) + CohortDiagnostics (cohort quality diagnostics).
+- **Boundary**: current focus stays FAERS signal detection; both are long-term RWE extension references, decoupled from the existing FAERS quantitative pipeline.
 
 **Key mechanism:** openFDA works keyless (anonymous 240 req/min, 1,000 req/day per IP); an optional free key only raises quota. The key, when used, is **stored locally only** (env var / local `.env`) and sent **only over HTTPS to the official openFDA endpoint** (when using local-direct `query_total` / `fetch_case_reports`) — never to any third party. NMPA main site (nmpa.gov.cn) is WAF-blocked (HTTP 412) for local direct fetch, but is reachable via the Coze browser channel (`--with-nmpa-coze`, source=`nmpa_pv`) — **verified live 2026-09-01** (drug=methotrexate → Bulletin No.75, tier=dedicated bulletin). All data are public adverse-event reports; zero confidential input. Endpoint details, indexable/non-indexable fields, and `count` endpoint pitfalls: `references/fetch_pipeline.md`.
 
@@ -135,7 +125,7 @@ Full formulas, thresholds, EBGM/MGPS math, FDR, aROR, trend, and score/tier weig
 | Capability | Flag / Source |
 |---|---|
 | Drug–event signal detection (PRR/ROR/IC/EBGM) + multi-method cross-judgement | FAERS |
-| **器械不良事件信号检测（同一套 2×2/PRR/ROR/IC/EBGM 计算）** | MAUDE via `--device`（Coze `source='maude'`，维度 `patient.device.brand_name`；**上线前需 Coze 控制台部署 `maude` 节点**） |
+| **Device adverse-event signal detection (same 2×2/PRR/ROR/IC/EBGM pipeline)** | MAUDE via `--device` (Coze `source='maude'`, dimension `patient.device.brand_name`; **requires `maude` node deployed in the Coze console first**) |
 | Statistical guards (BH-FDR · PT→SOC · sparse-2×2 `--validate-controls`) | — |
 | HTML + XLSX core deliverables (JSON/MD backup) | — |
 | China official PV bulletins (qualitative only) | `--with-cn-pv` |
