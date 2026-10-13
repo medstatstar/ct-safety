@@ -18,9 +18,13 @@ Provides generic, security-hardened helpers that EVERY R-backed ct- skill reuses
         confirmed=True. `preamble` lets a business skill inline its own domain R
         source (e.g. a localization helper) ahead of the generated code.
 
-This module is intentionally business-agnostic. Domain-specific R source strings
-(sample-size engines, i18n.R, adaptive-trial simulators, ...) live in each ct-
+This module is intentionally business-agnostic. Domain-specific R source
+strings (sample-size engines, i18n.R, adaptive-trial simulators, ...) live in each ct-
 skill (e.g. ct-samplesize), NEVER here -- so a freshly copied skill starts clean.
+
+Security gate (Clarity / PharmaSUG China 2026 AI175 §05): scan_forbidden_ops()
+runs BEFORE any generated R is executed, rejecting shell-escape / file-destroy /
+network-egress / quit / runaway-sleep calls. Always invoked by run_r().
 """
 
 import os
@@ -134,6 +138,81 @@ def sanitize_output(raw, max_lines=200, max_col=200):
     return '\n'.join(lines)
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Pre-execution forbidden-operation scan (defense in depth)
+# Mirrors Clarity (PharmaSUG China 2026 AI175) §05: a deterministic hard check
+# on the generated R BEFORE it runs. The RCE guard above allowlist-validates
+# USER strings; this layer additionally rejects dangerous CALLS that may appear
+# in generated code or a business `preamble` (shell escape, file destruction,
+# network egress, process termination, runaway sleep). Fail-closed.
+_FORBIDDEN_R_OPS = [
+    (r'(?<![\w.])system\s*\(', "shell/system command execution (system())"),
+    (r'(?<![\w.])system2\s*\(', "shell/system2 command execution"),
+    (r'(?<![\w.])shell\s*\(', "shell command execution (shell())"),
+    (r'(?<![\w.])file\.remove\s*\(', "file deletion (file.remove())"),
+    (r'(?<![\w.])file\.rename\s*\(', "file move/rename (file.rename())"),
+    (r'(?<![\w.])file\.copy\s*\(', "file overwrite (file.copy())"),
+    (r'(?<![\w.])unlink\s*\(', "file deletion (unlink())"),
+    (r'(?<![\w.])download\.file\s*\(', "network egress (download.file())"),
+    (r'(?<![\w.])httr\s*::', "network egress (httr::)"),
+    (r'(?<![\w.])curl\s*::', "network egress (curl::)"),
+    (r'(?<![\w.])RCurl\s*::', "network egress (RCurl::)"),
+    (r'(?<![\w.])quit\s*\(', "process termination (quit())"),
+    (r'(?<![\w.])Sys\.sleep\s*\(', "process control (Sys.sleep())"),
+]
+
+
+def _strip_r_comments(code):
+    """Strip R string literals and comments so forbidden-call patterns only
+    match real code (not text inside quotes or after '#').
+
+    Fail-closed posture: anything we cannot clearly classify as code is
+    dropped, so a genuine forbidden call inside a string is still rejected.
+    Handles basic " and ' literals with backslash escapes.
+    """
+    out = []
+    for line in code.splitlines():
+        res = []
+        in_str = False
+        q = None
+        i = 0
+        n = len(line)
+        while i < n:
+            ch = line[i]
+            if in_str:
+                if ch == '\\':
+                    i += 2
+                    continue
+                if ch == q:
+                    in_str = False
+                i += 1
+                continue
+            if ch in ('"', "'"):
+                in_str = True
+                q = ch
+                i += 1
+                continue
+            if ch == '#':
+                break
+            res.append(ch)
+            i += 1
+        out.append(''.join(res))
+    return "\n".join(out)
+
+
+def scan_forbidden_ops(code):
+    """Return a list of forbidden-operation descriptions found in R `code`.
+
+    Empty list => safe to execute. Used by run_r() as a pre-execution gate.
+    """
+    scanned = _strip_r_comments(code)
+    hits = []
+    for pattern, desc in _FORBIDDEN_R_OPS:
+        if re.search(pattern, scanned):
+            hits.append(desc)
+    return hits
+
+
 def run_r(code, confirmed=False, preamble=""):
     """Execute R `code` (OFF by default) or return a safe-preview message.
 
@@ -181,6 +260,15 @@ def run_r(code, confirmed=False, preamble=""):
         except OSError:
             pass
         return t("error.invalid_temp_path")
+
+    # Defense in depth: Clarity (PharmaSUG China 2026 AI175) §05 pre-execution
+    # hard check. The RCE guard above covers user *strings*; this guards the
+    # assembled generated body itself (incl. any business `preamble`).
+    violations = scan_forbidden_ops(body)
+    if violations:
+        return ("[SECURITY] Blocked by pre-execution forbidden-operation scan: "
+                + "; ".join(violations)
+                + ". Generated R must not call shell/file-destroy/network/quit/Sys.sleep.")
 
     # NOTE: invoked as a list (no shell), so no command/shell injection is possible.
     try:
