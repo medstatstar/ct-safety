@@ -742,3 +742,23 @@ _MESSAGES.update({
     "kw_gate.intent_drug_class": {"en": "Drug class", "zh": "药物类别"},
     "kw_gate.intent_auto": {"en": "Auto-detect", "zh": "自动识别"},
 })
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# External dictionary merge / 外部词典合并（2026-10-13 机制统一）
+# ═══════════════════════════════════════════════════════════════════════════
+# 内嵌词典仅作离线兜底；三级外部 json（存在则覆盖内嵌同名键并扩展新键）：
+#   i18n_messages.json        主词典（底座统一维护，§16.8 扩展一致件）
+#   i18n_r_messages.json      可选 R 扩展消息（真调 R 的技能才 vendor）
+#   i18n_skill_messages.json  可选技能专属词条（叶子私有文案的正确去处，
+#                             不上移底座以免污染共享词典）
+# 新增/修改文案一律在 json 中操作，勿再改内嵌段。文件缺失/损坏静默跳过
+# （离线兜底，不让模块崩溃——与 ct-literature 生产验证过的实现同型）。
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+for _MSG_NAME in ("i18n_messages.json", "i18n_r_messages.json", "i18n_skill_messages.json"):
+    try:
+        with open(os.path.join(_HERE, _MSG_NAME), encoding="utf-8") as _f:
+            _MESSAGES.update(json.load(_f))
+    except (OSError, ValueError):
+        pass

@@ -1,5 +1,25 @@
 # Changelog — ct-safety
 
+## v0.10.1 — 2026-10-13 · 修复应用页面调用 `entry_point` 恒为 `skill`（工作台入口未接线）
+
+> 现象：从 ct-safety 工作台 Web 应用页面发起的检索，后台飞书表 `entry_point` 列仍全部落 `skill`，无法按来源筛选。
+
+**根因（三重要素叠加，均实测确认）**
+
+1. `set_entry_point()` 自 v0.9.15 起只有定义、**全技能树零调用点**——v0.9.15 只做了「注入侧」（`attach_coze_contract` setdefault），漏了「设置侧」接线，契约 §1.3 要求的「工作台独立进程启动期调用 `set_entry_point("workbench")`」未落地。
+2. ct-safety 工作台是 **Popen 子进程架构**（`server.py` → `Popen(scripts/ct_safety.py)`）：真正向 coze 发请求的是子进程，父进程内即使调用 `set_entry_point()` 也无法跨进程传递进程级全局。
+3. 子进程入口 `ct_safety.py` 与环境变量通道均缺失——没有 `CT_ENTRY_POINT` 透传机制，`nmpa_coze._ENTRY_POINT` 只能取模块默认值 `"skill"`。
+
+**修复（环境变量透传 · 最小改动 · 向后兼容）**
+
+- **`adapters/nmpa_coze.py`**：新增 `_entry_point_from_env()`——模块加载时从环境变量 `CT_ENTRY_POINT` 解析 `_ENTRY_POINT` 初值（白名单 `skill`/`workbench`/`api`，空白/非法一律回退 `skill`，绝不写 `None` 或脏值）；`set_entry_point()` 运行期覆盖语义不变。
+- **`workbench/server.py`**：`Popen(ct_safety.py)` 时经 `env` 透传 `CT_ENTRY_POINT=workbench`，子进程 `nmpa_coze` 模块加载即继承工作台身份；agent / 技能进程不设该变量 → 恒 `skill`（无回归）。
+- **同步**：`workbench/adapters/nmpa_coze.py`、`workbench/publish-dist/adapters/nmpa_coze.py` 与主文件逐字节一致；`workbench/publish-dist/workbench/server.py` 同步（发布产物已含修复）。
+- **验证**：子进程端到端实测——`CT_ENTRY_POINT=workbench` 下 `dispatch()` 出站 payload 带 `"entry_point": "workbench"`，无 env 时带 `"skill"`；非法值（`evil`/空白/大小写变体）回退 `skill`；`ct-base/scripts/tests/test_entry_point.py` E1–E9 全通过；`py_compile` 五份副本全过。
+- **兼容性**：环境变量方案对旧版 `workbench/scripts/ct_safety.py`（缺 `--device`/`--lang` 等新参数的历史副本）无感——不读该变量也只会维持 `skill`，不会像新增 CLI 参数那样触发 `unrecognized arguments` 硬失败。
+
+> 备注：`workbench/scripts/ct_safety.py` 与技能根 `scripts/ct_safety.py` 存在版本漂移（旧副本缺 `--device`/`--soc-map`/`--lang` 等），自包含部署路径建议后续以 `publish-kit/build_publish.py` 重新构建收敛；本次修复不依赖该收敛（发布产物 publish-dist 用技能根 scripts，已覆盖）。
+
 ## v0.10.0 — 2026-10-08 · OMOP CDM + HADES RWE 扩展参考
 
 > 基于《临床试验Skill推荐》分析，新增 OMOP CDM 和 HADES 作为 RWE 方向扩展参考。

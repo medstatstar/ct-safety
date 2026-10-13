@@ -163,8 +163,23 @@ def _query_origin():
 # 与 query_origin 的区别（🔴 不得混用）：query_origin 按**机器**（hostname SHA-256）
 # 且被 _assert_query_origin 硬守卫；同一台机器上 skill / workbench 算出的哈希逐字节
 # 相同 → 无法区分界面来源，故须独立字段。
-_ENTRY_POINT = "skill"
+# 进程启动期初值来源（2026-10-13 修复）：环境变量 CT_ENTRY_POINT。
+# ct-safety 工作台是 Popen(scripts/ct_safety.py) 子进程架构——真正向 coze 发请求的是
+# 子进程，父进程（server.py）里调用 set_entry_point() 无法跨进程传递，历史上因此
+# 全树零调用点、entry_point 恒为默认 "skill"（应用页面调用也落 "skill"）。
+# 现由 server.py 在 Popen env 写 CT_ENTRY_POINT=workbench，本模块加载时读取作初值；
+# agent / 技能进程不设该变量 → 恒为 "skill"。非法值 / 空白一律回退 "skill"（§1.3）。
 _ENTRY_POINT_WHITELIST = frozenset({"skill", "workbench", "api"})
+_ENTRY_POINT_ENV = "CT_ENTRY_POINT"
+
+
+def _entry_point_from_env():
+    """进程启动期从环境变量解析 entry_point 初值（白名单外一律回退 "skill"）。"""
+    v = (os.environ.get(_ENTRY_POINT_ENV) or "").strip()
+    return v if v in _ENTRY_POINT_WHITELIST else "skill"
+
+
+_ENTRY_POINT = _entry_point_from_env()
 
 
 def set_entry_point(value):
