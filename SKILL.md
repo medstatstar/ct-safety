@@ -3,7 +3,7 @@ slug: ct-safety
 displayName: Clinical Trial Safety Signal / 临床试验安全信号专家
 name: ct-safety
 cn_name: 临床试验安全信号专家
-version: 0.10.1
+version: 0.10.3
 invocable: true
 required_commands: [python]
 summary: "基于 FDA FAERS 筛查药物-事件安全信号，计算 disproportionality（PRR / ROR / IC / EBGM，含 95% CI）与安全信号评分（0–100，T1–T4）。数据源：FDA FAERS（openFDA drug/event.json）、FDA 标签（drug/label.json）、中国 NMPA 药物警戒通报（cdr-adr.org.cn）、DailyMed 说明书、RxClass MED-RT、openFDA 召回执法、香港 ADR 警报。仅公开数据，零保密输入。"
@@ -165,6 +165,27 @@ Two-step, overview-first (**present summary in context, Excel on demand**):
 - **`faers_report.html`** — visual report (open in browser preview). **Core ①.**
 - **`faers_report.xlsx`** — ALL raw data (counts, 2×2, four measures, optional Label/CN-PV/Score). **Core ②; audit every number here.** (`faers_report.md` / `*.json` are backups only.)
 
+### Progressive analysis layers
+
+An extension of the overview-first design: every layer below is an **opt-in flag** (nothing runs by default — each layer adds openFDA query volume). Stack layers according to the question you need answered. All layers degrade gracefully (a single-layer failure never breaks the main report).
+
+| Layer | Question it answers | Flag | Network cost (relative to L0) | Report section |
+|---|---|---|---|---|
+| **L0 Standard** | Does this (drug, event) pair show a signal? | (default, no flag) | 1 × 2×2 count | Core ①② |
+| **L1 Grading** | How strong is the signal? Which one first? | `--with-fda-label` | +1 label query | Safety Signal Score 0–100 + T1–T4 |
+| **L2 Trend** | Is it **new** or long-standing? Worsening lately? | `--trend` | +N monthly pages (rate-limit sensitive) | Time-trend anomalies (CUSUM / rolling-Z / changepoint) |
+| **L3 Comparison** | Is it **this drug** or a class-wide effect? | `--compare-drugs FOCAL REF1 REF2` (needs ≥2 drugs) | +(1+M) counts | Multi-drug comparison · aROR (95% CI + sparse correction) |
+| **L4 Confirmation** | Any time/dose relationship? Worth escalating? | `--verify-signal` (needs `--case-level` for full depth) | +quarterly series (reuses L2 if already run); cases billed separately | Signal verification workflow (temporal CUSUM/Poisson + dose-response / dechallenge) |
+
+Typical combinations:
+- **Quick screen**: `--drug X --event Y` (L0)
+- **Routine monitoring**: `--drug X --event Y --with-fda-label` (L0+L1)
+- **New-signal investigation**: `--drug X --event Y --trend --with-fda-label` (L0+L1+L2 — answers "is this a Weber effect?")
+- **Class-effect triage**: `--drug X --event Y --compare-drugs X Y Z --with-fda-label` (L0+L1+L3 — answers "is the whole class like this?")
+- **Deep confirmation**: L0–L3 all on + `--verify-signal --case-level 200` (add `--psur` for a PSUR draft)
+
+> The L3 aROR is an **aggregate-level** adjusted reporting ratio from FAERS (the openFDA count API exposes no case-level covariates); true covariate adjustment needs `--case-level` case pulls followed by `adjust_ror.py`'s `logistic_irls`. An L2 changepoint may reflect reporting-behaviour shifts (media attention, regulatory alerts) rather than causality — conclusions from all three layers must be read together with RCT evidence and the label.
+
 ## API Key (openFDA) — optional, self-configured
 
 The skill runs **without a key**; a free key only raises quota. Provide via CLI `--api-key`, env `OPENFDA_API_KEY` (recommended), or skill-root `.env` (git-ignored; plaintext or `obf:` XOR+base64 per ct-base §5) — never paste keys into chat or shipped files. Details: `references/openfda_api_key.md`.
@@ -196,3 +217,5 @@ Maintainer-only (stdlib, no pytest; **not shipped**): `python tests/mode_b_test.
 
 ## Bug Reporting (ct-base §20.3, adapter: `adapters/bug_report.py`)
 Propose **at most once per session**, only on a strong signal **and** after ≥1 retry — never on repeated tuning. Always two-stage: ① show the sanitized report → ② send only on explicit consent; never re-propose after a decline. Full rules, 11-key whitelist, and CLI: `references/bug_reporting.md`.
+
+**2026-10-26 ct-base §22.27 ML 数据质量监测**：ML 数据质量监测作为传统 QC（CM0）的补充上层（CM1–CM2），重点识别精神药物/慢病 RCT 中的中心效应、数据漂移、系统性录入错误；须预定义假阳性率上限、警报阈值、升级路径三件套（NCI/Zenodo 2026-10-18）。
