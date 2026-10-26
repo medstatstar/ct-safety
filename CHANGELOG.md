@@ -1,5 +1,46 @@
 # Changelog — ct-safety
 
+## 仅工作台（不进发布包）· 2026-10-23 工作台 UI 规范对齐整改（ct-base workbench_ui.md）
+
+> 背景：用户要求对 ct 系列全部工作台（除 ct-advisor）按 ct-base 规范机检整改。机检项 A-L 见 ct-base §4.5/§5.2/§5.6.3/§7.2/§13.1。
+
+- **A 字号令牌化**：index.html 内联样式 58 处裸 `font-size:<px>` 全部替换为 `var(--wb-fs-*)`（映射 24/21/16/15/14/13/11 → 2xl/xl/lg/base/sm/xs/2xs，12/12.5/13.5 归 xs）。
+- **B 七档令牌**：在 :root 补全 `--wb-fs-2xl/xl/lg/base/sm/xs/2xs`（24/21/16/15/14/13/11px）。
+- **C 顶栏按钮基线（§5.2 2026-10-23 修订）**：`.wb-topbar .wb-btn` 与 `.wb-lang` → `min-height:34px; padding:6px 11px`；全局 `.wb-btn` 保持 40px；pill 33px 不动。
+- **D 页脚（新增）**：`<footer id="wb-footer">`「ct-safety 工作台 v0.1.0 · 基于ct系列技能统一框架构建」。
+- **E logo-box（新增）**：顶栏品牌 SVG 包 `.wb-logo-box` 40px 白框，内承 34×34。
+- **F 聚焦光环**：:focus 规则补 `box-shadow:0 0 0 3px var(--wb-brand-soft)`。
+- **G 视图淡入**：`@keyframes wbFade` + `.wb-view.active{animation:wbFade .18s ease}`。
+- **I 传输层**：server.py 响应加 gzip + Cache-Control 分级（css/js 86400 / HTML 60 / API no-store）。
+- **J app.config.json**：补 appName/domainPrefix(=ct-safety)/shareLink(https://ct-safety.app.workbuddy.host/)/startCmd。
+- 验证：机检 A-L 全 OK（H 无反馈按钮 N/A 由复核确认）；Playwright 无头实载 console/pageerror 零错误；body 15px、顶栏钮 34px、logo-box 40×40、focus 光环生效。
+
+## v0.10.4 — 2026-10-26 · §22.27 ML 数据质量监测（规划层）
+
+- **§22.27 P2·b ML 数据质量监测增强信号检测**（SKILL.md §9）：ML 异常模式识别补充确定性规则；须预定义假阳性率上限、警报阈值、升级路径三件套（NCI/Zenodo 2026-10-18）。
+- **版本同步**：SKILL.md `version: 0.10.3` → `0.10.4`。
+
+## v0.10.3 — 2026-10-19 · coze_dispatch 异步化：/stream_run 降级快速路径，主路径 /run 支持 accepted+run_id 轮询
+
+> 背景：Coze 云端网关 stgw 对 HTTP 请求有 60s 硬超时（ct-base §20.17.1 实测 60.0s 整 504，流式同样被杀）。ct-safety 原以 `/stream_run` 为主路径，重检索（CN-PV 全栏目抓取、ICTRP 型深翻页，服务端数分钟）必被杀 → 回退 `/run` 若返回 `{status:accepted, run_id}` 异步协议（服务端还在跑），客户端不识别该协议、把 accepted 信封当同步响应对待 → project_list 缺失 → 空结果/误判。同族 ct-registry `extsvc_client._run_async_poll` 已有成熟范本（ICTRP/CDE 实测穿越 60s 窗口）。
+
+- **主路径改为 `/run` 响应形态自适应**（`adapters/coze_dispatch.py`）：
+  - 同步返回 → 直接 `_parse_run_response`（与旧行为一致）；
+  - `{status:accepted, run_id}` → 新增 `_coze_async_poll()` 轮询 `{base}/run/status/{run_id}`：指数退避 5→30s、总上限 timeout（默认 300s）、终态 completed→同构解析 / failed·cancelled→错误载体（不静默）/ 到期→timeout 载体附缩小关键字引导。
+- **`/stream_run` 降级为快速路径**：socket timeout 钳制 `min(timeout, _STREAM_FAST_PATH_MAX=60s)`（env `CT_SEARCH_STREAM_TIMEOUT` 可配）——只承担 60s 内能完成的轻检索（SSE 进度 + 最快），到点主动切换主路径，不在必死的连接上干等。
+- **轮询韧性**：404（最终一致性窗口）/ 连接抖动 / 单次超时均续轮不废弃服务端任务；401/403 立即失败（重试无意义）。轮询 GET 为短请求，不占 §20.10 的 `/run` POST 限流额度；授权沿用提交时一次校验（轮询 URL 同 host 同 path 前缀）。
+- **顺带修正**：回退 `/run` 请求原打常量 `CT_SEARCH_ENDPOINT`，与授权检查用的 `endpoint` 参数可能不一致（调用方显式传自定义端点时）——改用实际 endpoint。
+- **验证**：新增 `scripts/tests/test_coze_dispatch_async.py` 17 断言 mock 全过（stream 成功 / 同步回退 / accepted 轮询 completed / failed / cancelled / 404 续轮 / 到期 / 401 立即失败 / 空 run_id 不误触 / 钳制）；全量 py_compile + adjust_ror SELF-TEST PASS + ct_safety rebind 链 import OK；真实探针 1 次（faers aspirin/BLEEDING，9.5s，1404 counts，stream 路径无损）。
+- **Coze 侧零改动**：纯本地客户端；`nmpa_pv` 源历史上实测为同步返回（v0.9.5 曾据此删异步主路径），本版按响应形态探测，两种形态都正确。
+
+## v0.10.2 — 2026-10-17 · 递进式分析路径文档化（L0–L4：趋势/同类药对比的使用指引）
+
+> SkillHub 竞品扫描发现「Active Comparator Single Soc Faers Safety Comparison」等同类药对比竞品占位。核查确认 ct-safety 的对应能力**早已实现且质量完备**（`--trend` CUSUM/rolling-Z/changepoint 与 `--compare-drugs` aROR 均于 v0.1.9 落地，mode_b 回归 10/10 含 aROR happy-path），缺口只在**使用路径不可见**——SKILL.md 仅在 Methods 段罗列 flag，用户不知道何时该加哪层、每层网络代价多少。本版纯文档变更，引擎与 CLI 零改动。
+
+- **SKILL.md 新增「递进式分析路径 / Progressive analysis layers」**：L0 标准（默认 2×2）→ L1 定级（`--with-fda-label`，Score 0–100 + T1–T4）→ L2 趋势（`--trend`，回答"是不是新出现的"）→ L3 同类药对比（`--compare-drugs FOCAL REF…`，回答"是药的问题还是类别的通病"）→ L4 确证（`--verify-signal` + `--case-level`）。每层标注**回答的问题 / flag / 网络代价（相对 L0）/ 报告章节**，并给四组典型组合（快速筛查 / 日常监测 / 新信号调查 / 类效应甄别 / 深度确证）。
+- **设计纪律**：遵循 overview-first 安全设计——每层均为 opt-in，**不默认自动跑**（每层都增加 openFDA 查询量）；文档明确 L2 突变可能源于报告行为变化（媒体/法规）、L3 aROR 为聚合层面无协变量调整的局限。
+- **验证**：mode_b_test.py 10/10 全过（含 aROR happy-path 与 signal_score 耦合）；`_render_trend` / `_render_compare` 输出复核（季度表 + 判定 + CI + 稀疏校正 + 免责声明齐全）。
+
 ## v0.10.1 — 2026-10-13 · 修复应用页面调用 `entry_point` 恒为 `skill`（工作台入口未接线）
 
 > 现象：从 ct-safety 工作台 Web 应用页面发起的检索，后台飞书表 `entry_point` 列仍全部落 `skill`，无法按来源筛选。
