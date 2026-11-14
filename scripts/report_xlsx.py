@@ -39,6 +39,9 @@ from excel_style import (make_formats, banner, page_decor, kpi_card, cover_logo,
                         PALETTES, HEADER_H, BANNER_H)
 from i18n import t, set_lang
 
+# 阶段 2：交付语言解析统一走 ct-base 共享件（单一真源，publish_inject 注入本目录）。
+from xlsx_delivery import resolve_report_lang
+
 PAL = PALETTES["safety"]
 _SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _LOGO = os.path.join(_SKILL_DIR, "assets", "icon_4x.png")
@@ -558,8 +561,10 @@ def _build_score(wb, fmts, score_res):
 def build_signal_xlsx(out_path, *, drug, event, fetch_data, disp_res=None,
                       cn_pv=None, label_data=None, label_status=None,
                       score_res=None, lang=None):
-    # Ensure i18n is in the right language (auto-detect OS locale if not specified)
-    set_lang(lang if lang else ("zh" if sys.platform == "win32" else None))
+    # Workbook language must not depend on the server OS: the old
+    # ``"zh" if win32 else None`` branch reset i18n to auto-detect on the
+    # published (Linux/en_US) workbench and silently emitted an English report.
+    set_lang(resolve_report_lang(lang, skill="safety"))
 
     wb = xlsxwriter.Workbook(out_path, {"in_memory": True})
     fmts = make_formats(wb, PAL)
@@ -593,11 +598,10 @@ if __name__ == "__main__":
     ap.add_argument("--event", default="?")
     ap.add_argument("--out", required=True)
     ap.add_argument("--lang", default="auto", choices=["auto", "zh", "en"],
-                    help="Language: auto (OS locale), zh, or en")
+                    help="Language: auto (CT_SAFETY_LANG / default zh), zh, or en")
     args = ap.parse_args()
 
-    if args.lang != "auto":
-        set_lang(args.lang)
+    set_lang(resolve_report_lang(args.lang, skill="safety"))
 
     data = json.load(open(args.fetch, encoding="utf-8")) if args.fetch else {}
     disp = json.load(open(args.disp, encoding="utf-8")) if args.disp else None
@@ -607,5 +611,6 @@ if __name__ == "__main__":
 
     build_signal_xlsx(args.out, drug=args.drug, event=args.event,
                       fetch_data=data, disp_res=disp, cn_pv=cn,
-                      label_data=label, label_status=None, score_res=score)
+                      label_data=label, label_status=None, score_res=score,
+                      lang=args.lang)
     print("[OK] wrote", args.out)

@@ -8,14 +8,20 @@ WHY THIS EXISTS
 用户指令（2026-09-01）：「统一采用轻本地端的策略，本地所有的 safety 检索需求
 一律改为外发 coze 实现。」本模块是这条指令的本地落地：
 
-  - 所有安全性「检索」动作经 Coze 统一端点外发，默认走 `/stream_run`（SSE 流式），
-    避免长检索被网关按单响应超时掐断；stream 无结果时自动回退 `/run`（非流式）。
+  - 所有安全性「检索」动作经 Coze 统一端点外发：
+    · **快速路径** `/stream_run`（SSE 流式）——仅承担 60s 内能完成的轻检索
+      （网关 stgw 60s 硬超时内最快、带 SSE 进度；超时主动切换下方路径）；
+    · **主路径** `/run`（非流式）——响应形态自适应：
+      同步返回 → 直接解析；`{status:accepted, run_id}` 异步协议 →
+      轮询 `/run/status/{run_id}`（指数退避 5→30s，总上限 timeout 秒）。
+      重检索（CN-PV 全栏目 / ICTRP 型深翻页）服务端可跑数分钟，同步响应必被
+      网关 60s 掐断，只有异步轮询能完整回收（2026-10-19 改造）。
   - 本地仅负责 disproportionality / signal_score / check_event（labeled 判定）/
     报告生成等计算。
   - 出站凭据 / 授权闸门 / PII 剥离 / 计费透传 **复用 nmpa_coze 单一真相源**，
     不重复实现 token 解码与 config 校验。
 
-架构规范：ct-base/BASE.md §20.14 — 词表留本地，抓取执行器上 Coze，长任务走流式。
+架构规范：ct-base/BASE.md §20.14 — 词表留本地，抓取执行器上 Coze，长任务走异步轮询。
 
 覆盖的 Coze source（与 ct-registry sources.py 注册一一对应）
 ──────────────────────────────────────────────────────
@@ -24,8 +30,8 @@ WHY THIS EXISTS
 
 端点（与 ct-literature 对齐）
 ──────────────────────────────
-  主路径：ct-search.coze.site/stream_run（SSE 流式）
-  回退：  ct-search.coze.site/run（非流式）
+  快速路径：ct-search.coze.site/stream_run（SSE 流式，钳制 60s）
+  主路径：  ct-search.coze.site/run（同步解析 / accepted+run_id 异步轮询自适应）
 """
 import json
 import os
@@ -84,6 +90,13 @@ CT_SEARCH_ENDPOINT_STREAM = os.environ.get("CT_SEARCH_ENDPOINT_STREAM",
                                             "https://ct-search.coze.site/stream_run")
 CT_SEARCH_ENDPOINT = os.environ.get("CT_SEARCH_ENDPOINT",
                                      "https://ct-search.coze.site/run")
+
+# ── stream 快速路径上限（2026-10-19 异步化改造） ────────────────────────────
+# Coze 云端网关 stgw 对 HTTP 请求有 60s 硬超时（ct-base §20.17.1 实测 60.0s 整
+# 504，流式同样被杀——不是逃生通道）。把 stream 的 socket timeout 钳到 60s：
+# 60s 内能完成的轻检索走 SSE（最快、带进度），到点主动切换 /run 主路径
+# （同步解析 / accepted+run_id 异步轮询自适应），不在必死的连接上干等。
+_STREAM_FAST_PATH_MAX = float(os.environ.get("CT_SEARCH_STREAM_TIMEOUT", "60"))
 
 # 并发限流（ct-base §20.10）：相邻两次 Coze 调用间隔 ≥1 秒
 _RATE_LIMIT_LOCK = threading.Lock()
@@ -347,13 +360,92 @@ def _stream_headers():
     return h
 
 
+def _coze_async_poll(source, endpoint, run_id, out, timeout, drug=None, event=None):
+    """异步协议：轮询 {endpoint_base}/run/status/{run_id}（照搬 ct-registry
+    adapters/extsvc_client._run_async_poll，改 stdlib urllib 零依赖）。
+
+    背景：ct-search 统一端点对重检索源（ICTRP/CDE 型深翻页、CN-PV 全栏目抓取）
+    返回 `{status:"accepted", run_id}` 而非同步结果——服务端还要跑数分钟，
+    同步响应必被网关 60s 掐断。此前客户端不识别该协议，把 accepted 信封当
+    同步响应对待 → project_list 缺失 → 空结果/误判（2026-10-19 修复）。
+
+    轮询策略（与 extsvc_client 对齐）：
+      - 指数退避：首轮 5s，逐轮 ×2 封顶 30s；
+      - 总上限 timeout 秒（调用方语义：总等待时间，默认 300s）；
+      - 轮询 GET 为短请求：单次网络抖动 / 单次超时 / 404（最终一致性窗口）
+        均续轮，不废弃服务端任务；401/403 鉴权问题立即失败（重试无意义）；
+      - 终态 completed → data["result"] 或 data 本体 → _parse_run_response
+        （与 /run 同步路径同一解析器）；failed/cancelled → 错误载体（不静默）；
+      - 到期 → is_timeout 错误载体，附缩小关键字的引导。
+    """
+    base = endpoint.rsplit("/run", 1)[0].rstrip("/")
+    status_url = "%s/run/status/%s" % (base, run_id)
+    headers = _stream_headers()
+
+    def _err(msg):
+        print("[coze-dispatch][%s] %s" % (source, msg), file=sys.stderr)
+        return _evidence_error(source, drug, event, msg) if source in _EVIDENCE_SOURCES \
+            else _generic_error(source, msg)
+
+    deadline = time.time() + timeout
+    wait = 5.0
+    while time.time() < deadline:
+        try:
+            req = urllib.request.Request(status_url, method="GET", headers=headers)
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                # 最终一致性窗口：任务刚提交时 status 可能短暂 404 → 续轮
+                pass
+            elif e.code in (401, 403):
+                print("[coze-dispatch] Token 无效或已过期，请更新 config/coze.dat",
+                      file=sys.stderr)
+                return _err("HTTP %s (poll /run/status)" % e.code)
+            else:
+                pass  # 其它 5xx：网关抖动，续轮等终态
+            time.sleep(min(wait, max(1, deadline - time.time())))
+            wait = min(wait * 2, 30)
+            continue
+        except Exception:
+            # 连接抖动 / 单次超时：服务端任务不受影响，续轮（deadline 兜底）
+            time.sleep(min(wait, max(1, deadline - time.time())))
+            wait = min(wait * 2, 30)
+            continue
+        status = data.get("status")
+        if status == "running":
+            time.sleep(min(wait, max(1, deadline - time.time())))
+            wait = min(wait * 2, 30)
+            continue
+        if status == "failed":
+            return _err("remote run failed: %s" % data.get("error"))
+        if status == "cancelled":
+            return _err("remote run cancelled (run_id=%s)" % run_id)
+        # completed（或 status 缺失的兜底）：最终结果两种形态
+        #  (a) 平台已重命名：{"status", "result": {...}}
+        #  (b) 直接是 result dict
+        result_payload = data.get("result", data)
+        result = _parse_run_response(result_payload, source)
+        print("[coze-dispatch][%s] 异步检索完成（run_id=%s，轮询回收）"
+              % (source, run_id), file=sys.stderr)
+        _maybe_write_out(out, result)
+        return result
+    return _err("timeout after %ss (poll /run/status/%s) — Coze 异步检索超过等待上限；"
+                "数据可能不全：建议缩小关键字 / 换其他注册源交叉验证"
+                % (timeout, run_id))
+
+
 # ── 统一外发检索 ──────────────────────────────────────────────────────────
 def dispatch(source, drug, event=None, date_from=None, date_to=None,
              run=False, out=None, timeout=300, token=None, endpoint=None,
              account_id=None, billing_token=None, extra=None):
     """统一外发检索。返回解析后的 result dict（与本地模块同构）；run=False 仅预览。
 
-    主路径 /stream_run（SSE 流式），回退 /run（非流式）。
+    路径分工（2026-10-19 异步化改造）：
+      - 快速路径 `/stream_run`（SSE）：socket timeout 钳制
+        min(timeout, _STREAM_FAST_PATH_MAX=60s)——只承担 60s 内能完成的轻检索；
+      - 主路径 `/run`：响应形态自适应——同步返回直接解析；
+        `{status:accepted, run_id}` → `_coze_async_poll` 轮询回收（重检索唯一活路）。
     `out` 非空时把结果写盘，兼容 ct_safety.py 既有 `json.load(open(out))` 往返。
 
     nmpa_pv 特殊处理：drug 参数可为 dict（cn_pv_keywords.build_nmpa_pv_query 的返回），
@@ -431,10 +523,12 @@ def dispatch(source, drug, event=None, date_from=None, date_to=None,
     # 限流
     _acquire_rate_limit()
 
-    # HTTP POST to Coze —— 主路径 /stream_run（SSE 流式），回退 /run
+    # HTTP POST to Coze —— 快速路径 /stream_run（钳制 60s），主路径 /run（同步/异步自适应）
     body = json.dumps(_sanitize(payload), ensure_ascii=False).encode("utf-8")
     try:
-        output = _coze_stream_once(body, timeout)
+        # 钳制理由：网关 60s 硬超时（stgw），stream 超过即整次被杀——
+        # 给它 300s socket timeout 只会干等到被杀，不如 60s 主动切换主路径。
+        output = _coze_stream_once(body, min(timeout, _STREAM_FAST_PATH_MAX))
         if output is not None:
             result = _stream_output_to_result(output, source)
             if result is not None:
@@ -451,13 +545,21 @@ def dispatch(source, drug, event=None, date_from=None, date_to=None,
         print("[coze-dispatch][%s] /stream_run 失败(%s)，回退 /run: %s"
               % (source, type(e).__name__, e), file=sys.stderr)
 
-    # 回退 /run（非流式）
+    # 回退 /run（非流式）——用实际 endpoint（授权检查用的就是它，勿再打常量）
     try:
         _acquire_rate_limit()
-        req2 = urllib.request.Request(CT_SEARCH_ENDPOINT, data=body,
+        req2 = urllib.request.Request(endpoint, data=body,
                                       headers=_stream_headers(), method="POST")
         with urllib.request.urlopen(req2, timeout=timeout) as resp2:
             data = json.loads(resp2.read().decode("utf-8"))
+        # 异步协议探测（2026-10-19）：重检索源返回 {status:accepted, run_id}
+        # （服务端还要跑数分钟）。不识别该协议会被当同步响应对待 → 空结果。
+        if isinstance(data, dict) and data.get("status") == "accepted" \
+                and data.get("run_id"):
+            print("[coze-dispatch][%s] /run 返回 accepted（run_id=%s），转异步轮询"
+                  % (source, data["run_id"]), file=sys.stderr)
+            return _coze_async_poll(source, endpoint, str(data["run_id"]), out,
+                                    timeout, drug=drug, event=event)
         result = _parse_run_response(data, source)
         _maybe_write_out(out, result)
         return result
@@ -640,6 +742,27 @@ class DeviceEventShim:
         # Coze maude 节点用器械默认维度；忽略本地 field/api_key/retries
         return dispatch("maude", drug, event, date_from=date_from, date_to=date_to,
                         run=run, out=out, timeout=max(int(timeout), 120))
+
+    def query_total(self, search, api_key=None, timeout=120, retries=3):
+        # MAUDE 器械模式：配对/事件总数经 device/event.json（与 FaersShim 的
+        # 本机直连例外对称，但端点须切换为 device 库，否则 patient.device.*
+        # 字段在 drug 端点无索引会返回 0/被 skip，导致不成比例分析 2x2 不完整）。
+        return self._real.query_total(search, api_key=api_key, timeout=timeout,
+                                      retries=retries, source="maude")
+
+    def count_field(self, search, field, api_key=None, limit=1000, timeout=60):
+        # MAUDE 器械模式：时间序列 receivedate 计数分面经 device/event.json。
+        return self._real.count_field(search, field, api_key=api_key, limit=limit,
+                                      timeout=timeout, source="maude")
+
+    def fetch_case_reports(self, drug, event=None, field="patient.device.brand_name",
+                           n=20, api_key=None, run=False, out=None,
+                           date_from=None, date_to=None, timeout=120, retries=3,
+                           source="maude"):
+        # MAUDE 器械模式：个例报告同样经 device/event.json（默认维度为器械名）。
+        return self._real.fetch_case_reports(drug, event, field, n, api_key, run=run,
+                                             out=out, date_from=date_from, date_to=date_to,
+                                             timeout=timeout, retries=retries, source="maude")
 
     def __getattr__(self, name):
         return getattr(self._real, name)

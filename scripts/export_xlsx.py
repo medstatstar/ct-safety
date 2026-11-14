@@ -9,9 +9,12 @@ chart). All charts are native .xlsx (no web page).
 
 i18n: all UI frame labels are localized via vendored ``i18n.t()``
 (copy of ct-base/scripts/i18n.py, keys ``xlsx.*`` / ``xlsx.safety.*``).
-Pass ``--lang {auto,zh,en}`` (default ``auto`` = OS locale). RAW DATA VALUES
-(reaction PTs, country codes, drug names, indication text) are NEVER translated —
-data fidelity is preserved; only the interface chrome switches language.
+``--lang {auto,zh,en}`` (default ``auto``) is resolved by
+:func:`resolve_report_lang` — explicit value > CT_SAFETY_LANG > config >
+default zh — instead of blindly following the server OS locale (the published
+workbench runs in an en_US container). RAW DATA VALUES (reaction PTs, country
+codes, drug names, indication text) are NEVER translated — data fidelity is
+preserved; only the interface chrome switches language.
 
 Sheets (names also localized):
   1. 说明 / README            - cover banner + 8 KPI cards + scope + data caveat
@@ -29,6 +32,7 @@ reference where values started at the header row.
 """
 
 import argparse
+import json
 import os
 import re
 import statistics
@@ -54,6 +58,12 @@ except Exception:  # defensive fallback — vendored copy must be present
         return key
     def set_lang(code):
         pass
+
+
+# ---- report UI language resolution (阶段 2：上移 ct-base 共享件) ------------
+# 单一真源 ct-base/scripts/xlsx_delivery.py（publish_inject 注入本目录）。
+# 交付物语言禁止回退到服务器 OS locale；契约见 references/xlsx_delivery.md。
+from xlsx_delivery import resolve_report_lang  # noqa: E402
 
 
 # ---- shared Excel visual standard (vendored from ct-base) ------
@@ -600,6 +610,9 @@ def build_reports(wb, rows, fmts, fast=False):
     if not rows:
         if fast:
             ws.merge_range(2, 0, 2, 12, t("xlsx.safety.raw_fast_note"), fmts["note"])
+        # 空结果也要遵守 §F5：数据表带冻结首行 + 自动筛选（否则交付物机检误报）。
+        ws.freeze_panes(1, 0)
+        ws.autofilter(0, 0, 0, 0)
         return
     cols = list(rows[0].keys())
     hfmt = fmts["header"]
@@ -628,8 +641,8 @@ def export_workbook(rows, out_path, meta=None, lang="auto", dists=None):
     `dists` may be pre-supplied (fast/count mode); otherwise computed from rows."""
     if xlsxwriter is None:
         raise RuntimeError("xlsxwriter not installed: pip install xlsxwriter")
-    if lang != "auto":
-        set_lang("zh" if lang == "zh" else "en")
+    # Always resolve explicitly — never leave "auto" to the server OS locale.
+    set_lang(resolve_report_lang(lang, skill="safety"))
     meta = meta or {}
     if dists is None:
         dists = prepare_dists(rows)
@@ -653,7 +666,9 @@ def main():
     ap.add_argument("--date-from")
     ap.add_argument("--date-to")
     ap.add_argument("--total", type=int, default=0, help="total matching reports in FAERS")
-    ap.add_argument("--lang", default="auto", choices=["auto", "zh", "en"])
+    ap.add_argument("--lang", default="auto", choices=["auto", "zh", "en"],
+                    help="report UI language (auto = CT_SAFETY_LANG / config / "
+                         "default zh, NEVER the server OS locale; en forces English)")
     args = ap.parse_args()
 
     import csv

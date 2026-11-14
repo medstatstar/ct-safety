@@ -1,6 +1,8 @@
 # Language Policy / 双语语言策略
 
 > This file is the detailed companion to the "Language" section in SKILL.md. Applicability: this policy applies to **ct- skills that are statistical-analysis related AND intended for GitHub publication** (e.g. ct-samplesize). The ct-base scaffold itself ships the bilingual setup for library consistency; ct- skills that are NOT published / for internal use only default to Chinese-only and need no bilingual content. / 本文件是 `SKILL.md` 中「Language / 语言」段的详版补充。适用范围：本策略适用于 **ct- 系列中统计分析相关、且准备发布到 GitHub 的技能**（如 ct-samplesize）。ct-base 作为库底座采用双语脚手架以保持一致；不发布、仅自用的 ct- 技能默认纯中文，无需双语。
+>
+> **Web 工作台（本地浏览器 UI）场景落地细则**：凡技能附带本地 Web 操作界面（如 ct-samplesize `workbench/`），界面文本双语化的完整方案见 `ct-base/references/workbench_ui.md` —— 静态 chrome 走 `data-i18n`+`localize()`、schema 反射的动态表单走「按请求 lang 生成 + 前端按 LANG 取 + `setLang` 重建」三段链路、JS 动态文案走 `T.*` 键、计数/单位后缀特例双语同显。本文件仍为总策略权威，二者不冲突。
 
 ## Three core rules / 三条核心规则
 
@@ -39,6 +41,8 @@ If judged "Chinese environment", generate prompts in Chinese automatically; othe
 ## `user_language` backup param for coze compute endpoints / coze 计算端 `user_language` 备用入参
 
 凡 ct-* 技能**调用 coze 计算端点**（R 引擎等），应在请求 `params` 中注入 `user_language`（`zh` / `en`）作为**备用提示**，供 coze 端决定报告/图表文案语言。判定优先级由 `i18n.resolve_user_language(query, override)` 统一实现（三级）：
+
+> **注**：`user_language` 的字段位置、与 `skill_version` 顶层信封的关系、以及整体 coze 入参 / 飞书日志契约，集中在 **`ct-base/references/coze_io_contract.md`**（§1.1 入参 / §2 飞书存储），本文件仅描述语言判定逻辑。
 
 1. **显式 `override`（如 `--language en`）最高** —— 多写法归一化（中文语境→`zh`、英文→`en`、未知值原样小写透传）；
 2. **否则按【输入 query 文本内容】判定**（内容级检测，见上）—— 中文系统 + 英文输入 → `en`，不被系统 locale 误判 `zh`；
@@ -91,3 +95,48 @@ R-install / Rscript messages, copy `ct-base/scripts/i18n_r_messages.json` into i
 - 底座已在 `i18n_messages.json` 预置通用 `auth.*` / `error.*` 标准词条：`auth.coze_outbound`（首次出站授权）、`auth.coze_outbound_denied`（拒绝说明）、`auth.serial_blocked`（串行拦截回退）、`error.requests_missing`（依赖缺失）、`error.coze_401`（鉴权拒绝）、`error.fallback_local`（回退本地）。子技能直接 `t("auth.coze_outbound", endpoint=...)` 引用，或按需扩展，**切勿自建重复词条**。
 - 占位符约定：`{endpoint}` 出站地址、`{cmd}` 手动安装命令、`{reason}` 异常原因、`{timeout}` 超时秒数。
 - 机器信号（如 `[AUTH-BLOCK]` / `[coze] AUTH_REJECTED`）与用户可读提示**分离**：信号写 stderr 供 agent / 开发者定位，用户提示走 `t()` 单语输出。
+
+## Locale chain propagation & zh-leak checks / locale 链式传播与中文泄漏检查（2026-10-29 补充）
+
+> 来源：meta-analysis 工作台 EN 模式实测——GRADE 页残留中文、过度声明页整页中文、
+> `p value` 与数值粘连。逐条根因均为本节规则的缺失，特此补入规范。
+
+1. **Chain propagation / locale 链式传播**：界面语言必须经**每一条后端调用边界**透传到底
+   （server route → orchestrator（如 `run_fullflow` / `run_fastpath`）→ 各块驱动器 → 子模块）。
+   禁止「只有部分块消费语言」——orchestrator 应把 locale 存入会话 cfg 并持久化，各块统一从
+   cfg 取值（缺省 zh），而不是各自由请求参数断链。 / The UI locale must reach **every**
+   backend stage boundary. Orchestrators store it in the session cfg (persisted); block drivers
+   read it from cfg — never rely on per-request params that only some stages consume.
+
+2. **Inherit, don't reset / 内层函数继承而非重置**：子模块函数的 `lang` 参数缺省值必须是
+   `None`（= 继承当前上下文语言），**禁止**缺省 `"zh"` 并在函数体内无条件
+   `_LANG.set(lang)`——那会在每次调用时把语言重置回中文（meta-analysis `interpret_result`
+   的实际翻车点）。只有显式传入 lang 时才覆盖。 / Inner functions must default
+   `lang=None` (inherit); an unconditional `_LANG.set("zh")` default silently resets the
+   language on every call.
+
+3. **Single language source / 单一语言上下文源**：同一进程内多个模块各自持有 `_LANG`
+   ContextVar 时，**所有语言入口必须同步设置全部 ContextVar**（或抽取公共
+   `set_lang()`）；只设一个就会出现「同一信封内部分中文部分英文」。 / When several
+   modules each keep their own `_LANG` ContextVar, every language entry point must set
+   **all** of them (or share one helper) — partial sync yields mixed-language envelopes.
+
+4. **Whitespace-preserving DOM replace / 前端文本替换保留空白**：渲染后按文本节点整体
+   替换的兜底层，必须用「在原串中替换裁剪键」（`node.nodeValue = t.replace(key, out)`），
+   不得 `node.nodeValue = dict[key.trim()]` 直接覆盖——后者会吞掉标签尾随空格，与相邻
+   内联值拼接（`p value0.0739` 粘连实例）。模板里内联 label/value span 之间必须写显式
+   空白。 / Post-render text-node replacement must replace the trimmed key **within** the
+   original node value (preserving surrounding whitespace); wholesale assignment swallows
+   trailing spaces and glues the label to the adjacent inline value.
+
+5. **Data vs copy / 数据与文案的判据（DOM 翻译层补充）**：命中片段、句子引文、正则模式、
+   扫描预览等**来自用户输入/匹配器的字符串是数据**，即使含中文也保持逐字（与 Excel 数据
+   保真原则同源）；DOM 翻译层用 skip 选择器豁免这些区域。只翻译**生成的叙述文案**。 /
+   Matched fragments, quoted sentences, regex patterns and scan previews are **data** — keep
+   them verbatim even when Chinese; only generated narrative copy is translated.
+
+6. **Automated leak scan / 自动化泄漏扫描**：EN 模式回归必须包含一次机械扫描——遍历信封
+   / 页面全部字符串，报告含 CJK 的键；数据字段（上条）列入豁免清单。人工目测不可靠
+   （meta-analysis 此前多轮目测仍漏 `interpretation._LANG`）。 / EN-mode regression must
+   include a mechanical CJK scan over all output strings with an explicit data-field
+   exemption list.

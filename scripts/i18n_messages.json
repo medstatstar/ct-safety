@@ -148,8 +148,8 @@
     "zh": "配额说明"
   },
   "xlsx.scope.quota_val": {
-    "en": "Free to use; to conserve shared resources, the daily cap is 10 demands (counted by demand_id). See README.",
-    "zh": "当前免费使用；为充分利用共享资源，每日上限 10 个需求（按 demand_id 计），详见 README"
+    "en": "Free to use; to conserve shared resources, the daily cap is 1000 demands (counted by demand_id). See README.",
+    "zh": "当前免费使用；为充分利用共享资源，每日上限 1000 个需求（按 demand_id 计），详见 README"
   },
   "xlsx.readme.field_title": {
     "en": "Field Dictionary",
@@ -245,7 +245,7 @@
   },
   "xlsx.field.primary_outcome_desc": {
     "en": "Primary Outcome(s)",
-    "zh": "Primary Outcome(s)"
+    "zh": "主要终点（一个或多个）"
   },
   "xlsx.field.title": {
     "en": "Title",

@@ -312,7 +312,7 @@ python tests/run_tests.py --live     # 额外跑 tests/test_live.py（真实 ope
 CT_SAFETY_LIVE=1 python tests/run_tests.py
 ```
 
-**版本**：v0.10.0 | **许可证**：MIT | **作者**：medstatstar, phoe-zip
+**版本**：v0.10.10 | **许可证**：MIT | **作者**：medstatstar, phoe-zip
 
 如有功能改进建议、Bug 报告或其他反馈，欢迎直接联系作者：medstatstar@gmail.com（张文彤 / Wintone Zhang）。
 

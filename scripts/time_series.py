@@ -27,15 +27,29 @@ import fetch_faers
 
 
 def fetch_monthly_series(drug, event, field="patient.drug.medicinalproduct",
-                         api_key=None, date_from=None, date_to=None, timeout=60):
+                         api_key=None, date_from=None, date_to=None, timeout=60,
+                         fetch_mod=None, ev_field=None, date_field=None):
     """Return ordered list of {ym: 'YYYYMM', count: int} for the (drug, event)
-    pair via a single openFDA receivedate count facet. Returns [] on failure."""
-    ev_field = "patient.reaction.reactionmeddrapt"
-    clause = fetch_faers._date_clause(date_from, date_to)
+    pair via a single openFDA receivedate count facet. Returns [] on failure.
+
+    *fetch_mod* lets callers inject the (possibly shimmed) ``fetch_faers``
+    module — e.g. in MAUDE device mode the global is rebound to
+    ``DeviceEventShim``, whose ``count_field`` targets device/event.json. When
+    omitted, the locally imported module is used (FAERS default, unchanged).
+    *ev_field* selects the adverse-event dimension (reaction MedDRA PT for
+    FAERS, event_type for MAUDE device events); *date_field* selects the date
+    dimension (receivedate for FAERS, date_received for MAUDE).
+    """
+    mod = fetch_mod if fetch_mod is not None else fetch_faers
+    if ev_field is None:
+        ev_field = "patient.reaction.reactionmeddrapt"
+    if date_field is None:
+        date_field = "receivedate"
+    clause = mod._date_clause(date_from, date_to, date_field=date_field)
     search = '%s:"%s" AND %s:"%s"%s' % (field, drug, ev_field, event, clause)
     try:
-        rows = fetch_faers.count_field(search, "receivedate", api_key=api_key,
-                                       limit=1000, timeout=timeout)
+        rows = mod.count_field(search, date_field, api_key=api_key,
+                               limit=1000, timeout=timeout)
     except Exception as e:  # noqa: BLE001
         print("[WARN] trend monthly fetch failed: %s" % e)
         return []

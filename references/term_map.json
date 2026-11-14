@@ -604,5 +604,9 @@
   "麻黄碱": "ephedrine",
   "黑色素瘤": "melanoma",
   "默克尔细胞癌": "Merkel cell carcinoma",
-  "鼻咽癌": "nasopharyngeal carcinoma (NPC)"
+  "鼻咽癌": "nasopharyngeal carcinoma (NPC)",
+  "胰淀素": "amylin",
+  "成纤维细胞生长因子21": "FGF21",
+  "垂体": "pituitary",
+  "垂体腺瘤": "pituitary adenoma"
 }

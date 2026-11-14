@@ -418,8 +418,8 @@ _MESSAGES = {
     "xlsx.scope.source_val": {"en": "WHO ICTRP detail API (via unified endpoint); CDE drug trial registry platform",
                               "zh": "WHO ICTRP 详情接口（经统一端点）；CDE 药物临床试验登记平台"},
     "xlsx.scope.quota":   {"en": "Quota note", "zh": "配额说明"},
-    "xlsx.scope.quota_val": {"en": "Free to use; to conserve shared resources, the daily cap is 10 demands (counted by demand_id). See README.",
-                             "zh": "当前免费使用；为充分利用共享资源，每日上限 10 个需求（按 demand_id 计），详见 README"},
+    "xlsx.scope.quota_val": {"en": "Free to use; to conserve shared resources, the daily cap is 1000 demands (counted by demand_id). See README.",
+                             "zh": "当前免费使用；为充分利用共享资源，每日上限 1000 个需求（按 demand_id 计），详见 README"},
 
     "xlsx.readme.field_title": {"en": "Field Dictionary", "zh": "字段说明"},
     "xlsx.field.col":          {"en": "Field",   "zh": "字段"},

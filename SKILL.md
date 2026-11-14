@@ -3,7 +3,7 @@ slug: ct-safety
 displayName: Clinical Trial Safety Signal / 临床试验安全信号专家
 name: ct-safety
 cn_name: 临床试验安全信号专家
-version: 0.10.4
+version: 0.10.11
 invocable: true
 required_commands: [python]
 summary: "基于 FDA FAERS 筛查药物-事件安全信号，计算 disproportionality（PRR / ROR / IC / EBGM，含 95% CI）与安全信号评分（0–100，T1–T4）。数据源：FDA FAERS（openFDA drug/event.json）、FDA 标签（drug/label.json）、中国 NMPA 药物警戒通报（cdr-adr.org.cn）、DailyMed 说明书、RxClass MED-RT、openFDA 召回执法、香港 ADR 警报。仅公开数据，零保密输入。"
@@ -34,6 +34,27 @@ permissions:
   data: "no confidential data input. Retrieval requests (drug/event public query keywords) are sent to the ct-registry unified endpoint ct-search.coze.site (thin local client). Only public query parameters + public retrieval results cross the boundary; no confidential user data is ever transmitted."
 
 ---
+## Data Egress Guardrail (CT family standard · F33)
+
+This skill may call external endpoints (Coze services, shared third-party search
+endpoints, public APIs or LLMs). **Internal confidential data must not leave the
+local domain.** Mandatory rules:
+
+- **Never outbound**: patient-level records, unpublished protocols / CSRs / internal
+  documents, personal identifiers or sponsor-confidential content — as query terms,
+  attachments or prompt payload.
+- **Allowed minimum**: public search terms and non-content metadata only (machine
+  hash, skill version, entry point, language, request id). Results from public
+  registries (ct.gov / CDE / FAERS / OpenAlex / PubMed, etc.) are processed locally.
+- **Local first**: computation, de-identification, aggregation and reporting stay on
+  this machine; confirm the payload carries no confidential field before any cloud call.
+- **Visible disclosure**: workbench search forms must state the outbound endpoint and
+  this boundary in visible text, not only in a hover tooltip.
+- **Fail loud**: stop and tell the user if any rule cannot be guaranteed; never
+  degrade silently.
+
+Machine-checked by `ct-base/scripts/spec_lint.py` rule **F33**.
+
 
 ## Language
 
@@ -56,8 +77,10 @@ Family standard: `ct-base/references/continuity.md` (pattern A). Echo the block 
 |---|---|
 | Share link | `https://ct-safety.app.workbuddy.host/` (domainPrefix `ct-safety`) |
 | appId | `wbapp_GyOm0cdJ1qHoaQxlFZOVwl` · deploy metadata: `workbench/app.config.json` |
+| Publish bundle | `workbench/publish/` (rebuild: `python workbench/publish-kit/build_publish.py`) |
+| **Single source of truth** | **`references/published_app.md`** — registry / 6 version anchors / re-publish protocol / pending-deploy debt / post-deploy smoke list |
 
-> **Re-publish rule**: always overwrite with the existing `appId` — never `createNewApp`; after deploy, assert the returned `shareLink` equals the expected URL (ct-base §13.5 dirty-binding red line). Last republished 2026-09-26.
+> **Re-publish rule**: always overwrite with the existing `appId` — never `createNewApp`; after deploy, assert the returned `shareLink` equals the expected URL (ct-base §13.5 dirty-binding red line). **Load `references/published_app.md` before any deploy.** Do not write a "last republished" date here — it belongs in that file only (previously duplicated and stale since 2026-09-26).
 
 > Safe by default: **overview-first**. Step 1 (overview) runs automatically; Step 2 (detailed retrieval) runs ONLY after the user explicitly confirms.
 >
@@ -86,7 +109,7 @@ Two categories — **quantitative** (2×2 disproportionality) and **corroborativ
 | Category | Source | Access | Status |
 |---|---|---|---|
 | Quantitative | FDA FAERS (`drug/event.json`) | Thin local client (Coze unified endpoint `ct-search.coze.site`). `query_total` / `fetch_case_reports` always local-direct (structured state cannot round-trip through Coze) | Required (A-tier) |
-| Quantitative | **MAUDE device adverse events (`device/event.json`)** — `--device` | Same thin-client single-egress via Coze (`source='maude'`). Device dimension defaults to `patient.device.brand_name`; 2×2 & disproportionality reused unchanged | Optional (requires Coze-side `maude` node deployment) |
+| Quantitative | **MAUDE device adverse events (`device/event.json`)** — `--device` | Same thin-client single-egress via Coze (`source='maude'`). Device dimension defaults to `device.brand_name`, adverse-event dimension to `event_type`, date dimension to `date_received`; 2×2 & disproportionality reused unchanged | Optional (maude channel on the unified endpoint verified working 2026-11-08) |
 | Quantitative | FDA Label (`drug/label.json`) | Thin local client (Coze unified endpoint). `check_event` local-only | Optional `--with-fda-label` |
 | Corroborative | DailyMed SPL · RxClass MED-RT · openFDA Enforcement | Thin local client (Coze unified endpoint) | Optional `corroborative_sources.py` |
 | Qualitative | cdr-adr.org.cn | Thin local client (Coze `nmpa_pv` node; local keeps keyword expansion + evidence grading + cache) | Optional `--with-cn-pv` |
@@ -125,7 +148,7 @@ Full formulas, thresholds, EBGM/MGPS math, FDR, aROR, trend, and score/tier weig
 | Capability | Flag / Source |
 |---|---|
 | Drug–event signal detection (PRR/ROR/IC/EBGM) + multi-method cross-judgement | FAERS |
-| **Device adverse-event signal detection (same 2×2/PRR/ROR/IC/EBGM pipeline)** | MAUDE via `--device` (Coze `source='maude'`, dimension `patient.device.brand_name`; **requires `maude` node deployed in the Coze console first**) |
+| **Device adverse-event signal detection (same 2×2/PRR/ROR/IC/EBGM pipeline)** | MAUDE via `--device` (Coze `source='maude'`, dimension `device.brand_name` / `event_type` / `date_received`; **maude channel verified working on the unified endpoint, 2026-11-08**) |
 | Statistical guards (BH-FDR · PT→SOC · sparse-2×2 `--validate-controls`) | — |
 | HTML + XLSX core deliverables (JSON/MD backup) | — |
 | China official PV bulletins (qualitative only) | `--with-cn-pv` |
@@ -218,4 +241,4 @@ Maintainer-only (stdlib, no pytest; **not shipped**): `python tests/mode_b_test.
 ## Bug Reporting (ct-base §20.3, adapter: `adapters/bug_report.py`)
 Propose **at most once per session**, only on a strong signal **and** after ≥1 retry — never on repeated tuning. Always two-stage: ① show the sanitized report → ② send only on explicit consent; never re-propose after a decline. Full rules, 11-key whitelist, and CLI: `references/bug_reporting.md`.
 
-**2026-10-26 ct-base §22.27 ML 数据质量监测**：ML 数据质量监测作为传统 QC（CM0）的补充上层（CM1–CM2），重点识别精神药物/慢病 RCT 中的中心效应、数据漂移、系统性录入错误；须预定义假阳性率上限、警报阈值、升级路径三件套（NCI/Zenodo 2026-10-18）。
+**2026-10-26 · ct-base §22.27 ML data-quality monitoring**: ML data-quality monitoring sits as a supplementary layer (CM1–CM2) on top of conventional QC (CM0), targeting detection of centre effects, data drift, and systematic entry errors in psychotropic-drug / chronic-disease RCTs; three elements must be pre-specified — an upper bound on the false-positive rate, alert thresholds, and an escalation path (NCI/Zenodo 2026-10-18).

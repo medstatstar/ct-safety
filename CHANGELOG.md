@@ -1,5 +1,248 @@
 # Changelog — ct-safety
 
+## v0.10.11 — 2026-11-14 · 数据源清单核实（5 个即全部）+ 侧栏折叠提示沉底
+
+用户问「确认一下数据源就这么几个吗」，并指出侧栏「单击空白折叠」不该悬在导航项下面。
+
+### 核实结论（代码级，非文案推断）
+
+本工作台检测链路打到的源**就是 5 个，无遗漏**：`server.py::_build_args` 只可能追加 `--with-fda-label` / `--with-cn-pv` / `--with-nmpa-coze`，加上固定主源 FAERS 与 MAUDE 器械模式（`enable_device_mode` 换 `DeviceEventShim`），与 `SRC_LIST` 的五项一一对应。
+
+未被列出的两类，均**不该**进这张表：
+
+- **佐证源 3 个**（DailyMed / RxClass / FDA 召回）：只存在于 `scripts/corroborative_sources.py` 这个独立 CLI，`ct_safety.run()` 不 import 它；工作台的「对照验证」走的是 `--validate-controls`（对照药对校验），不是佐证源。列进来就是又犯「写了不跑」的错。
+- **实测阻断 6 个**（VigiAccess / EU EudraVigilance / Health Canada / PMDA-JADER / VAERS / UK MHRA）：见 `references/data_source_channels.md` §3 的 `BLOCKED_SOURCES`，只如实披露「被阻断」，不可能有产出。
+
+### 改动
+
+- 数据源表下新增一行脚注（`srcBlockedNote`，zh/en 对齐），把上面两类**明确标为「不在本页链路」**，避免用户下次再怀疑漏写；表格本身保持 5 行不变。
+- 侧栏 `.wb-side-tip` 恢复 `margin-top:auto`：折叠提示沉到侧栏最底部，不再紧贴第三个导航项（这是 v0.10.9 视觉整改 B5 的反向回调——当时为了「提示跟导航项成组」去掉 auto，实际看是把提示悬在半空）。
+- 版本锚点 5 处 `0.10.10 → 0.10.11`。
+
+
+## v0.10.10 — 2026-11-14 · 数据源页语义纠正（源说明 / 产出核对分离）
+
+用户反馈：「数据源这里写了一堆未产出是什么意思？貌似这里给弄成了是要产出的数据文件，而不是安全检索时使用的数据源。」
+
+**确认是设计错误，不是数据问题。** 复核两点：
+
+1. 「数据源与口径」页当时**没有数据源说明**——全文只有一句 hint + 一张 9 行清单。把抓取结果、分析产物、导出文件混在一张表里叫「数据源」，其中「综合信号评分」「Excel 报表」根本不是源。
+2. 清单状态只有「已产出 / 未产出」二值，**本次没勾选的分析项也报「未产出」**。一个只跑 FAERS 主源的成功运行，会显示 5 个「未产出」，看起来像大面积失败。
+
+### 改动
+
+- **后端 `/api/source-health`**：`SOURCE_ARTEFACTS` 由 `(名称, 文件)` 改为 `(分组, i18n 键, 文件, 触发条件)`；新增 `_arte_applicable()`，按本次 `event` 与 `addons` 判定该产物**本应产出**与否。响应新增 `group` / `applicable` / `run.fail_hint`（traceback 末行异常），名称改传稳定 id（`af*`）不再回中文串。
+- **触发条件按 `ct_safety.py` 实际分支核对**：`disproportionality` / `signal_score` 需 `--event`；`multi_event_disp` 反而只在**无 event** 时由 `--top-events-signal` 产出；`fda_label` / `cn_pv` / `nmpa_coze` 随对应附加源；`faers_cases` 需个案级且带 event。
+- **页面结构**：拆成两张卡——「数据源与口径」（5 个源 + 性质徽章 + 判定口径，静态渲染，无运行记录也有内容）与「最近运行 · 产出核对」（动态）。源说明直接由 `SRC_LIST` 生成，与检索勾选项同源。
+- **状态三态**：已产出（带字节数）/ 缺失（该有却没有，warn 色）/ 未启用（未勾选，中性色）。运行失败时不铺 9 行「缺失」，只给一条失败摘要 + 异常行。
+- **i18n**：产出名称走 `arteTxt()` 显式映射（`WB_T[key]` 动态索引会被机检判为孤儿键，按 ct-base §8 裁定静态化）；运行状态与附加分析名不再直接显示 `done` / `faers`。
+- 版本锚点 7 处 `0.10.9 → 0.10.10`；`published_app.md` 欠账表补一条并纠正两行历史版本号。
+
+### 验证
+
+`workbench_page_audit` ALL GREEN（0 findings）；`wb_detail_check` C-detail-* 全绿；`wb_theme_check` P1 0 / WARN 0；成功运行（`osimertinib` + `interstitial lung disease`）实测 4 项已产出、5 项未启用、0 缺失；失败运行实测只显示一条摘要 + `ModuleNotFoundError` 行；中英双语实渲染无 `pageerror`。
+
+## v0.10.9 — 2026-11-14 · 工作台视觉审查整改（A 组规范硬项 + B 组可用性优化）
+
+用户要求「从页面设计角度优化，且不得与 ct-base 规范冲突」。以 Playwright + 本机 Chrome 实渲染 1440/1024/768/390 四档 + `getComputedStyle` + WCAG 对比度计算为据，先出审查报告，再按 A/B 两组一次性落地。全部改动落在 `workbench/index.html` 内联 `<style>` 与该页 DOM，未触碰 `tokens.css`。
+
+### A 组 · 规范硬项（原状态为违规）
+
+- **A1 表单 label / 卡片描述 11px → 13px**`[§4.5]`：`.wb-field label`、`.wb-src-desc` 原用 `--wb-fs-2xs`(11px)。§4.5 明确 2xs 仅限非交互徽章，label 与输入控件强关联、卡片描述属正文。改为 `--wb-fs-xs`；层级差改由「颜色 + 字重」承担。
+- **A2 未选中卡取消 `opacity:.72`**`[§4.5]`：原降权使描述实际混成 `#89929C`（白底 3.16:1、蓝底 2.95:1，均不达 4.5:1），且 opacity 表达的是「禁用」而非「未勾选」。改为：未选 = 透明底 + 灰描边；选中 = 白底 + 品牌描边 + `inset 3px` 品牌左边条 + 名称走 `--wb-brand-deep`。描述改 `--wb-sub`，实测 **5.1:1**。
+- **A3 顶栏状态胶囊恢复三态语义**`[§19]`：原 `rgba(语义色,.18)` 叠在 `#1657AB` 上混出 `#13629F`，绿/橙/红语义全丢。改为白底实心 + 语义色字与圆点：ok `#047857`(5.48:1)、warn `#B45309`(5.02:1)、err `#B91C1C`(6.47:1)、connecting `#1D4ED8`(6.7:1)。
+- **A4 反向发现：`--wb-muted` 不能承载正文**：`.wb-empty` / `.wb-field-hint` / `#wb-footer` / `.wb-side-tip` 原用 `--wb-muted`(仅 2.7~3.1:1)，全部改 `--wb-sub`；`.wb-side-tip` 本身是可点击目标，11px → 13px。
+
+### B 组 · 视觉 / 可用性优化
+
+- **B1 内容区加 `max-width:1280px`**：`.wb-main` 原无上限，折叠侧栏后内容从 1228 → 1378、输入框 536 → 611，表单二次变形。改由 `.wb-view` 承担宽度上限并居中；同时删除 `.wb-main` 与 `.wb-view` 的重复 `padding`（原 52px 双重内缩）。
+- **B2 accent 卡补 `border-top:3px` 并降一条蓝面**：`.wb-card.accent` 缺 §5.6.3-3 顶边（与 `workbench.template.html` 不一致）；`.wb-addons-ev` 原与 accent 卡同底色同值，导致「分组框」与「选中卡」同色不同义 → 改透明底 + 虚线轮廓。
+- **B3 卡片网格与等高**：`minmax(240px)` → `minmax(300px)`（1124 宽下由 4+1 孤行改 3+2）；`.wb-src{min-height:84px}` + 描述 2 行 `line-clamp`，实测卡片高度由 `90/72` 混排收敛为**全部 84px**；`769~1100px` 断点由 3 列改 2 列（避免描述截断过狠）。描述加 `title` 兜底完整文本。
+- **B4 自定义勾选框**：12 个原生 `appearance:auto` 方块改为接管外观（16px / 4px 圆角 / 品牌勾），保留 `:focus-visible` 焦点环（§30.4）。
+- **B5 折叠提示回归视野**：`.wb-side-tip` 原 `margin-top:auto` 被推到侧栏最底部（3 个菜单项时中间空 600px），改为紧跟菜单组下方 + 顶部细分隔线。
+- **B6 操作带收束**：原「`details` 文字链 + 漂浮按钮」改为 `.wb-actions`（顶部 1px 分隔线，左状态 / 右按钮），主按钮 13px → `--wb-fs-sm` 14px/600、`min-width:132px`。
+- **B7 结果区空态**：`#wb-result-mount` 首屏为空（整张卡只有标题）。改为「尚未运行检测 + 一句操作指引」双行空态（新增 `resultEmptyTitle` / `resultEmptyHint` 双语键）。
+- **B8 常驻格式提示**：日期格式原只写在 placeholder（输入即消失）→ 改为 label 内常驻 `.wb-field-hint`，placeholder 回归示例值；`Top 事件数` 输入框 `max-width:120px`。
+- **B9 顶栏副标题减负**：11px 单行 nowrap 塞 5 段能力清单（443px）→ 压到 3 段（303px）。
+- **B10 复核中新发现的真 bug：SOC 分布条形图整体不可见**：`.wb-bar .fl` 是 `<span>`，未设 `display:block`，`width/height` 对 inline 元素无效 → 填充条尺寸为 0，只剩轨道。补 `display:block` 后修复；同时 `.wb-land > div:only-child{max-width:520px}` 消除「只占 1/3 列宽、右侧空洞」。
+
+### 验证
+
+- `workbench_page_audit` → ALL GREEN（0 findings）；`wb_detail_check` → C-detail-* 全绿（FAIL 0 / WARN 0）；`wb_theme_check` → P1 0 / WARN 0；`spec_lint` 既有 INFO 不变。
+- 浏览器冒烟：1440 / 1024 / 768 / 390 四档 + 侧栏折叠态 + 中英切换 + 内置示例结果渲染，`pageerror` 与 `console.error` 均为 0。
+- 已知非本次问题：本地 `server.py` 实例未带 `CT_SAFETY_MOCK=1` 时会因 `report_xlsx` 依赖缺失把 traceback 直接渲染到结果区（后端环境问题，非样式）。
+
+
+## v0.10.8 — 2026-11-14 · 工作台合规整改 + 侧栏统一（发布前体检收口）
+
+本版汇总当日工作台侧全部整改，并完成发布前合规体检：版本锚点 6 处统一到 `0.10.8`、`tokens.css` 共享件回注 `ct-base` 真源（补齐 `.form-row` 规则）、`workbench/_bak_*` 陈旧备份目录移出工作台（存档至 `ct-safety/_local_archive/`，消除 §16.13 P1「遗弃前端」）、发布载荷重建。
+
+### 侧栏导航对齐 §5.6.2（可折叠 / 吸顶 / 窄屏横条）
+
+用户反馈「左侧菜单栏不符合统一规范、单击不折叠」。原导航是自造 `.wb-nav` + `.navitem`（无折叠、无图标、无吸顶），改为家族统一形态 `.wb-side` + `.wb-navitem`。
+
+- **类名与结构对齐**（§5.6.2 / §18.2-9）：`<nav class="wb-side" id="wb-side">`，导航项 `.wb-navitem`（内联 SVG 图标 + `.wb-nav-label` 双语标签），JS 选择器同步由 `.navitem` → `.wb-navitem`。
+- **折叠 / 展开**：单击侧栏空白处（`onclick` 判 `closest('.wb-navitem')` / `.wb-side-tip`）调用 `toggleSide()`，桌面折叠为 62px 纯图标条（标签 `display:none`）；状态写 `localStorage['wb-side-collapsed']`，`wbInitSide()` 刷新后恢复；底部 `wb-side-tip`（`sideFoldTip` 双语）亦可点击折叠。
+- **吸顶**：`.wb-side{position:sticky; top:var(--wb-chrome-h)}`，`--wb-chrome-h` 由 `wbSyncChromeH()` 实测顶栏高度写入（窄屏顶栏换行增高不会错位），并监听 `resize`。
+- **页脚归位内容列**：`#wb-footer` 移入 `.wb-main` 末尾（§26 同族口径），否则页脚占据 shell 底部 34px 会把吸顶侧栏在页面最底部顶出 34px。
+- **窄屏（≤768px）**：侧栏转顶部横排菜单条（`flex-direction:row`、`position:static`、横向滚动），折叠态强制 `.wb-nav-label{display:inline}`（§5.6.2 验收硬项 2），导航项 `min-height:44px`。
+- **机检 / 实测**：`workbench_page_audit.py` 主页面 + 发布副本 ALL GREEN；`wb_ui_check` C4/C7 OK；`check_i18n.py` 通过（新增 `sideFoldTip` zh/en 成对）。真实 Chrome（Playwright）实测：1400 折叠 212→62、标签隐藏、`localStorage=1`、刷新后保持、点导航项只切视图不折叠；768/500/375/320 折叠态标签可见且页面无横向溢出（scrollWidth = clientWidth）；0 console error。
+
+
+### 工作台合规整改（视觉档位 / 单源 / C7 返回钮）
+
+依据 `ct-base/references/workbench_ui.md` + `scripts/workbench_page_audit.py` 机检，把工作台从「功能可用但 chrome 不合规」拉回家族规范。所有改动同时落到 `workbench/` 与 `workbench/publish/workbench/`。
+
+- **档位品牌**：ct-safety 属 A 档，原误用 legacy `clinical-teal`（顶栏 `#06b6d4` 白字对比度 2.96 FAIL）→ 统一 `ct-tier-a`（deep→seed 渐变，白字 5.06 / 7.03 PASS）。涉 `<html data-brand>`、内嵌兜底 `theme.brand`、JS 兜底 `setAttribute`、`workbench.config.json`。
+- **CFG-EMBED 单一真源**：内嵌 `#wb-config` 兜底与外置 config 深度对齐（`i18n.defaultLang` en→zh、补 `quality` 键）。
+- **C7 返回 CT 首页钮**（§5.2 / §18.2-7）：`.wb-top-actions` 最右端新增 `#wb-cthome`（house SVG + `data-i18n="ctHome"`）+ `const CT_HOME`（带协议）+ `wbGoCtHome()`；新增 zh/en `ctHome` 键。
+- **内联副本归位外链**（§18.2-3）：移除 `#wb-inline-wblist`（CSS）与 `#wb-inline-wblistjs`（JS）两份陈旧内联副本，改外链 `./wb-list.css` / `./wb-list.js` 单一真源。内联 CSS 缺 `.wb-list-xscroll`（9 列事件表横向滚动依赖）且内联 JS 缺搜索防抖，均随之外链修复；HTML 体积 −21 KB。
+- **JS-SYNTAX**：`<style>` 注释内 `<script>` 示例含 `…`(U+2026)，被审计正则当 JS 块解析而 `node --check` 失败；改为合法 JS。
+- **I18N 孤儿键清理**：`tierT1~T4` 由动态拼接 `WB_T["tier"+n]` 改为显式 `TIER_TXT` 映射；真死键 `btnHas` / `dlHtml` / `historyEmpty` / `srcHealthFile` 从 zh/en 双词典移除。
+- **出站披露收口**：移除检索表单底部 `outboundNote` 横幅（用户 2026-11-14 判定「不是很必要」），端点信息并入 FAERS 数据源锁形提示 `srcLockTip`（含 `ct-search.coze.site`、「与 ct-registry 共用」「无本地降级」「不上传保密数据」），信息不丢、页面更干净。
+
+**验证**：`workbench_page_audit.py` 主页面 + 发布副本双跑 ALL GREEN；借 ct-adam `wb_ui_check.py` 校验 C4（外链 CSS）/ C7（返回钮）双 OK；`:8791` 对 `/`、`/wb-list.css`、`/wb-list.js`、`/tokens.css` 全 200。版本号未 bump（属发布动作）。
+
+## 2026-11-13 · 共享资产契约同步（§11 / §19.2，非 UI 决策变更，页面版本号不变）
+
+按 ct-base 2026-11-13 增补批次同步共享资产：`workbench/wb-list.css` 注入卡片动作统一右列锚点（`.wb-list-cardacts-bottom` + `--wb-cardact-right` / `--wb-cardact-gutter`）；`workbench/tokens.css` 补 `--wb-pill-base` / `--wb-cardact-right` / `--wb-cardact-gutter`；`publish/` 下同名副本一并同步（另把 `index.html` 内联列表样式的旧 `right:10px` 改为新契约，publish 副本同步）。
+
+采用**精确注入**而非整文件覆盖：ct-base 真源 `wb-list.css` 的字号仍是裸 px，多数叶子已自行令牌化；整文件覆盖会把字号退回裸 px，并可能丢失技能自有令牌/增强，故只替换契约部分、保留其余原文。
+
+**验证**：CSS 花括号平衡；Playwright 实测 `--wb-cardact-right=10px`、`--wb-cardact-gutter=0px`、`--wb-pill-base` 生效，右上/右下动作规则均取 `var(--wb-cardact-right)`、`cardbody` 取 `var(--wb-cardact-gutter)`，页面 JS 错误 0；publish 副本与源逐字节一致。
+
+## 2026-11-08 · 工作台事实订正与能力对齐（v0.10.7 补丁，未部署）
+
+> 与 `ct-literature` / `ct-registry` 同轮横向整改。本次病因既不是「界面滞后」也不是
+> 「发布链路失修」，而是 **页面陈述与 SKILL.md 架构事实矛盾**，且牵涉数据流向。
+
+### P0 · 事实订正（性质：透明性，非措辞润色）
+- **数据流表述**：`srcNote` / `srcLockTip` / `threadT1` 中英共 6 处原写「FAERS 经 openFDA
+  直连（恒开）」，与 `SKILL.md` §Architecture（v0.9.9 起全部检索出站到与 ct-registry 共用的
+  `ct-search.coze.site`，thin local client、无本地降级）矛盾。改为如实陈述：本地只做计算，
+  检索词会离开本机；仅 `query_total` / `fetch_case_reports` / `check_event` 为直连例外。
+  `index.html` 头注释同步订正。
+- **出站披露（新增）**：检索表单新增可见 `outboundNote`，显著披露第三方统一端点与
+  「不上传保密数据」边界，不再只藏在 MAUDE 悬停提示里。
+- **`maode` → `maude`**（中英两处），并把 MAUDE 节点前置条件从 `<label title>` 提升为
+  可见 `srcDeviceNote`（原先节点未部署时勾选会 dispatch 报错而用户看不到前置条件）。
+- **`snapTip` 重写**：原文「快照追踪（--track / --diff）与 PSUR 视角可在完整版接入」
+  一句错两遍 —— 43 个 CLI flag 里根本没有 `--track` / `--diff`（ct-registry 能力，模板残留），
+  而 `--psur` 早已在 `server.py:_build_cmd` 接线。改为说明 PSUR 真实用法（需填聚焦事件）
+  并明确本技能不提供快照追踪。
+- **版本锚点 6 处统一 `0.10.7`**：`SKILL.md` front-matter（`0.10.5`）、
+  `workbench.config.json` / `index.html` 内嵌 `WB_CFG` / `wbRenderFooter()` fallback /
+  `app.config.json`（原 4 处 `0.1.0`，用户天天看到 `v0.1.0`）、CHANGELOG 首条。
+- **`workbench/check_i18n.py`**：硬编码了另一台机器的绝对路径，换机必然
+  `FileNotFoundError`；改为 `Path(__file__).with_name("index.html")`。
+
+### P1 · 结果与运行态可见性
+- **综合信号评分卡**：`scripts/ct_safety.py` 在 `_render_score()` 之外额外落盘
+  `signal_score.json`（纯增量产物，不改 CLI 行为）；`server.py:_parse_outputs` 读取并经
+  `summary.score` → `_task_view` 透传；结果卡渲染 Safety Signal Score 0–100、T1–T4 徽标、
+  评分构成与判定依据。**多事件模式无该产物时显示说明，不伪造分数**。
+  离线演示补一张明确标注非真实的示例评分卡。
+- **数据源页运行态**：新增 `GET /api/source-health`（只读磁盘真实产物 + 日志 WARN，
+  含目录穿越防护），前端渲染最近运行的 9 项产物清单、附加分析、端点与降级告警；
+  原先该页只有 3 段静态文案。
+
+### 反向借鉴（跨技能，先判适用性）
+- **参数失效告知**：新增 `_applied_report()`，`POST /api/search` 与 `_task_view` 双向透传，
+  结果卡显示「填了但没生效」及本地化原因（未登记字段 / 需聚焦事件 / 对照药不足 2 个 /
+  器械模式覆盖字段 / 未登记附加项）。借鉴 ct-registry `applied=False` + ct-literature
+  `_applied_report()`；**直接命中本技能的旧误解**：用户勾了 PSUR 却没填事件，页面上
+  完全看不出没执行。
+- **检索计划审查**：表单新增常驻可折叠「跑前可审查」区块，实时列出药物 / 事件 / 源 /
+  字段 / 日期窗 / 统计口径 / 出站端点。**逐站改词控件没照搬** —— ct-registry 那套源于
+  CDE 中文 / WHO 英文的语言差异，本技能各源共用同一英文检索词，只借「跑前可审查」意图。
+- **离线演示兜底：核实为「已存在」，不重复造** —— `_OFFLINE` + `demoSearch()` +
+  `demoNote` 横幅 + `demoTag` 早已完整，本轮只在其中补评分卡形态。
+- **部署单一事实源**：新建 `references/published_app.md`（registry / 6 处版本锚点 /
+  重发布协议 / 待部署欠账 / 部署后冒烟）；`SKILL.md` 删除写死的
+  `Last republished 2026-09-26`，改为指向该文件，消除双事实源。
+
+### P2 · 防复发（含三技能横向补齐）
+- 新建 `workbench/capability_parity.py`（5 条检查），接入 `ctqa.config.json` 的 W0 层。
+  43 个 CLI flag 中 25 已接线、18 项 `EXEMPT_FLAGS` 全部写明分类与理由、0 未判定。
+- **新增第 5 条「架构 ↔ 文案事实一致性」**：`FACT_CLAIMS` 断言表 +
+  `FACT_CROSS_CHECKS` 交叉断言（仅当 SKILL.md 命中架构事实锚点时，才禁止 UI 出现
+  与之矛盾的陈述）。本次一号问题正是纯参数检查抓不到的类型；同轮把第五条移植进
+  `ct-literature` / `ct-registry` 的检查器。
+- 构建脚本新增 `_bak*` 通用排除，避免备份目录被打进线上载荷。
+
+### 验证与边界
+- `capability_parity.py` PASS（0 fail / 0 warn）；`py_compile`、内联 JS `node --check`
+  （2 blocks）、函数级与 HTTP 冒烟全通过；发布包重建并 MD5 校验。
+- ⚠️ **线上覆盖发布未执行**（外部发布动作，需单独确认）；本地 `workbench/publish/`
+  载荷已就绪。
+
+---
+
+## v0.10.7 — 2026-11-06 · 阶段 2 接入 ct-base 交付契约 + 空报告结构补齐
+
+> 关联 ct-base v1.4.45。
+
+- `export_xlsx.py` / `report_xlsx.py` 删除本地 `resolve_report_lang()` 与 fallback 副本，改为 `from xlsx_delivery import resolve_report_lang`（`skill="safety"`）；共享件注入 `scripts/` 与 `workbench/publish/scripts/`。
+- `build_reports()` 空数据分支补齐 `freeze_panes(1,0)` + `autofilter(0,0,0,0)`，对齐交付规范 F5（此前空报告无任何冻结/筛选，交付物机检误报）。
+- 验证：信号报告与 3 表版 zh/en 两版逐格扫描，英文版 CJK 单元格 0、中文版全中文；空数据 / 非空数据样本均通过 `verify_workbook()`；`CT_SAFETY_LANG=en` 与显式 `--lang en` 均英文；`py_compile` 与发布包 MD5 一致。
+- ⚠️ 线上应用仍待重新部署后页面下载才生效。
+
+---
+
+## v0.10.6 — 2026-11-06 · 工作台 Excel 语言对齐 + 脚本层 auto 回退修复
+
+> 关联 ct-registry 0.14.4 / ct-literature 1.7.4 横向排查。
+
+### 检查结论（与另两个技能不同）
+- 主链路**已有**显式语言传递：前端 `lang: WB_LANG` → `server.py --lang` → `ct_safety.py --lang`（默认 zh）→ `report_xlsx.build_signal_xlsx(lang=...)`；线上 12:12 那份报告确为中文「说明/概要/原始计数」。因此**没有** ct-registry 那种 OS-locale 误判。
+- 但线上 12:11 那份是英文 `README / Summary / Raw Counts`：根因是 `workbench.config.json` 的 `i18n.defaultLang = "en"`（同家族 ct-registry / ct-literature 均为 zh），而 `wbDetectLang()` 对非中文浏览器取 `defaultLang` → 英文界面下发 `--lang en`。
+- 另一处真实隐患：`report_xlsx.build_signal_xlsx()` 在 lang 缺省时执行 `set_lang("zh" if sys.platform == "win32" else None)`，云端 Linux 会把 i18n 重置为 auto → 英文；`export_xlsx.export_workbook(lang="auto")` 同样只认 OS locale。对话式 CLI / 独立调用会踩。
+- 两份线上样本结构均完整（冻结 `A2`、无键名回退、无手写极简 OOXML），**不存在 ct-registry 那种「格式乱」**。
+
+### 修复
+- `workbench/workbench.config.json` 与发布副本：`defaultLang` en → zh，与家族一致（手动切 EN 仍可出英文报告）。
+- `scripts/export_xlsx.py`：新增 `resolve_report_lang()`（显式 > `CT_SAFETY_LANG` > config > 默认 zh），`export_workbook()` 始终解析。
+- `scripts/report_xlsx.py`：复用同一 resolver，删掉 `win32` 平台判断；独立 CLI 把 `args.lang` 透传给 `build_signal_xlsx`（此前 `--lang en` 会被函数内默认 zh 覆盖）。
+- 同步 `workbench/publish/scripts/` 两个文件，MD5 一致。
+
+### 验证
+- 模拟云端 OS locale：`lang=None` → 中文「说明/概要/原始计数」；`lang=zh` 中文；`lang=en` 英文；`export_workbook(auto)` 中文 / `en` 英文；4 组优先级用例通过。
+- `py_compile`、两份 config JSON 解析通过。
+- ⚠️ 线上应用需按 §13.5 用既有 appId 覆盖发布后生效；本次仅完成代码与发布包修复，未部署。
+
+---
+
+## v0.10.5 — 2026-10-28 · ct-qa 接入补齐（W2I/P3 激活）+ 1 项 P1 i18n 残留修复
+
+### Fixed（P1 · 英文界面中文残留，由新启用的 W2I 层检出）
+- **中文药名 / 中文事件词输入框的 placeholder 在 EN 界面仍显示中文示例**
+  （`fDrugCnPh: "e.g. 奥希替尼"` / `fEventCnPh: "e.g. 间质性肺病"`）。
+  静态层 `static.cjk_dict_allow` 曾把这两个键豁免掉，所以只有权威判据 W2I（切 en 后读真实 DOM）
+  能发现。en 值改为纯英文说明：`"e.g. osimertinib (type its Chinese name)"` /
+  `"e.g. interstitial lung disease (type its Chinese term)"`；zh 值不变。
+
+### Added（ct-qa 配置补齐，§27.6 强制项）
+- **`layers.enable` 补 `W2I` 与 `P3`**：原仅 `W0/W1/W2B`。本技能有出站管线
+  （`adapters/coze_dispatch.py` / `nmpa_coze.py`），按 §27.6 条 3 必须配 `prompt` 节并启用 P3；
+  W2I 是条 2 要求「必须配置声明」的推荐层（缺失＝英文界面零覆盖，上面 P1 因此长期不可见）。
+- **新增 `adapters/ctqa_p3_wrapper.py`**：`dispatch()` 的 payload 在函数**内部**拼装，
+  没有独立 `build_payload()`。wrapper **不复制构造逻辑**（复制即漂移），而是以
+  `run=False` 调真实 `dispatch()`（SAFE PREVIEW，零网络 I/O），从
+  `[PREVIEW] … payload={...}` 行回收真实 payload —— 保证 P3 守的是生产同一份构造代码。
+  `sanitize` 复用出站真实实现 `nmpa_coze._sanitize`（手机号 / 身份证 / 邮箱三类打码）。
+- **`ctqa.config.json` 补 `prompt` 节**（原为 `"prompt": {}` 空对象）。
+
+### 验证
+- `python -m ctqa run --skill <ct-safety>`：**PASS 108 / FAIL 1 → 修复后 FAIL 0，绿灯**（exit 0）。
+  P3 首次激活即 7/7 PASS；W2I 由 FAIL 1 转 PASS 5。
+- 剩余 WARN 3：`W0-010` 内联 `<style>`、`W1-005` 事件协议启发式告警、
+  `W2B-019` 资源级 404（静态服务无后端 `/api/*`，环境噪音）。
+
+## v0.10.4 — 2026-10-26 · §22.27 ML 数据质量监测（规划层）
+
+- **§22.27 P2·b ML 数据质量监测增强信号检测**（SKILL.md §9）：ML 异常模式识别补充确定性规则；须预定义假阳性率上限、警报阈值、升级路径三件套（NCI/Zenodo 2026-10-18）。
+- **版本同步**：SKILL.md `version: 0.10.3` → `0.10.4`。
+
 ## 仅工作台（不进发布包）· 2026-10-23 工作台 UI 规范对齐整改（ct-base workbench_ui.md）
 
 > 背景：用户要求对 ct 系列全部工作台（除 ct-advisor）按 ct-base 规范机检整改。机检项 A-L 见 ct-base §4.5/§5.2/§5.6.3/§7.2/§13.1。
@@ -14,11 +257,6 @@
 - **I 传输层**：server.py 响应加 gzip + Cache-Control 分级（css/js 86400 / HTML 60 / API no-store）。
 - **J app.config.json**：补 appName/domainPrefix(=ct-safety)/shareLink(https://ct-safety.app.workbuddy.host/)/startCmd。
 - 验证：机检 A-L 全 OK（H 无反馈按钮 N/A 由复核确认）；Playwright 无头实载 console/pageerror 零错误；body 15px、顶栏钮 34px、logo-box 40×40、focus 光环生效。
-
-## v0.10.4 — 2026-10-26 · §22.27 ML 数据质量监测（规划层）
-
-- **§22.27 P2·b ML 数据质量监测增强信号检测**（SKILL.md §9）：ML 异常模式识别补充确定性规则；须预定义假阳性率上限、警报阈值、升级路径三件套（NCI/Zenodo 2026-10-18）。
-- **版本同步**：SKILL.md `version: 0.10.3` → `0.10.4`。
 
 ## v0.10.3 — 2026-10-19 · coze_dispatch 异步化：/stream_run 降级快速路径，主路径 /run 支持 accepted+run_id 轮询
 

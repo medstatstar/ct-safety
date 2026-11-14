@@ -312,7 +312,7 @@ python tests/run_tests.py --live     # also runs tests/test_live.py (real openFD
 CT_SAFETY_LIVE=1 python tests/run_tests.py
 ```
 
-**Version**: v0.10.0 | **License**: MIT | **Authors**: medstatstar, phoe-zip
+**Version**: v0.10.10 | **License**: MIT | **Authors**: medstatstar, phoe-zip
 
 For feature requests, bug reports, or feedback: medstatstar@gmail.com (Wintone Zhang / 张文彤).
 

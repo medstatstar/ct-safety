@@ -37,6 +37,30 @@ import tempfile
 from i18n import t
 
 
+# ── Windows 子进程无控制台窗口（2026-10-15）─────────────────────────────────
+# Windows 上 Rscript.exe / python.exe / powershell.exe 均为控制台子系统程序：
+# 父进程自身没有控制台时（WorkBuddy 桌面端宿主、pythonw 等 GUI 场景），直接
+# spawn 会让 Windows 为子进程新建控制台 → 屏幕闪出前台弹窗。CREATE_NO_WINDOW
+# （+ STARTF_USESHOWWINDOW / SW_HIDE 双保险）令子进程完全后台运行；
+# stdout/stderr 走管道捕获，run_r 的净化 / 取值逻辑不受任何影响。
+_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
+
+def _hidden_kwargs() -> dict:
+    """返回抑制控制台弹窗的 subprocess 关键字参数（非 Windows 平台返回 {}）。"""
+    if not sys.platform.startswith("win"):
+        return {}
+    kw = {"creationflags": _CREATE_NO_WINDOW}
+    try:
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 0  # SW_HIDE
+        kw["startupinfo"] = si
+    except Exception:
+        pass
+    return kw
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Security: strict validation of EVERY user string that reaches generated R
 # ═══════════════════════════════════════════════════════════════════════════
@@ -274,7 +298,8 @@ def run_r(code, confirmed=False, preamble=""):
     try:
         proc = subprocess.run(
             [rscript, '--vanilla', tmp],
-            capture_output=True, text=True, timeout=300
+            capture_output=True, text=True, timeout=300,
+            **_hidden_kwargs()
         )
         raw = (proc.stdout or '') + (proc.stderr or '')
         return sanitize_output(raw)

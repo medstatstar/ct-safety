@@ -28,6 +28,7 @@ Office 文档（docx / xlsx / pptx）→ md 转换器（stdlib-only，零第三�
     python office_to_md.py <file> --check                          # 仅校验体积与可解析性
 """
 
+import io
 import os
 import sys
 import zipfile
@@ -394,21 +395,130 @@ def _pptx_slide_text(root) -> str:
     return "\n\n".join(out)
 
 
+# ── 全文字提取（§6.7 阅读契约，2026-11-05 增强）────────────────────────────
+# 用户口径：**文字信息必须零遗漏（尤其插入的文本框与表格），格式可以有损**。
+# 旧版只走 spTree 的 p:sp / graphicFrame，会漏掉组合形状、备注、母版/版式、
+# 图表缓存、SmartArt、批注、docProps 元数据、形状替代文字、外链 URL 与嵌入包。
+# 现改为「OOXML zip 内所有 XML part 的文本节点全量提取」，与脱敏适配器同口径。
+C_NS = "{http://schemas.openxmlformats.org/drawingml/2006/chart}"
+R_NS = "{http://schemas.openxmlformats.org/package/2006/relationships}"
+PPTX_IGNORE_TAGS = {C_NS + "f"}          # 图表公式引用，非显示文字
+PPTX_TEXT_ATTRS = ("name", "descr", "title", "alt", "tooltip", "prompt")
+PPTX_EMBED_EXTS = (".xlsx", ".docx", ".pptx", ".xlsm", ".docm", ".pptm")
+
+
+def _pptx_part_texts(xml_bytes, rels=False):
+    """提取单个 XML part 的全部文字（text / tail / 白名单属性），保持文档顺序。
+
+    stdlib-only；不做命名空间前缀重写（只读，不回写），故无格式保真负担。
+    """
+    try:
+        root = ET.fromstring(xml_bytes)
+    except ET.ParseError:
+        return []
+    out = []
+    if rels:
+        for rel in root.iter(R_NS + "Relationship"):
+            if rel.get("TargetMode") == "External" and rel.get("Target"):
+                out.append(rel.get("Target"))
+        return out
+    out, claimed, attr_claimed = [], set(), set()
+    # a:p 内的 a:t 先按段落拼接：避免敏感词 / 词组被拆进多个 run 后断行
+    # （插入的文本框、表格单元格、备注、组合形状里的文字都在这里）
+    for para in root.iter(A + "p"):
+        seg = "".join(t.text or "" for t in para.iter(A + "t")).strip()
+        for t in para.iter(A + "t"):
+            claimed.add(id(t))
+        for el in para.iter():
+            for k in PPTX_TEXT_ATTRS:
+                v = el.attrib.get(k)
+                if v and v.strip() and (id(el), k) not in attr_claimed:
+                    out.append(v.strip())
+                    attr_claimed.add((id(el), k))
+        if seg:
+            out.append(seg)
+    # 其余文本节点：图表缓存 / SmartArt / docProps / customXml / 批注 …
+    for el in root.iter():
+        if el.text and el.text.strip() and el.tag not in PPTX_IGNORE_TAGS \
+                and id(el) not in claimed:
+            out.append(el.text.strip())
+        if el.tail and el.tail.strip():
+            out.append(el.tail.strip())
+        for k in PPTX_TEXT_ATTRS:
+            v = el.attrib.get(k)
+            if v and v.strip() and (id(el), k) not in attr_claimed:
+                out.append(v.strip())
+                attr_claimed.add((id(el), k))
+    return out
+
+
+def _pptx_embedded_texts(blob):
+    """嵌入的 OOXML 包（Excel / Word 数据源）→ 内部全部文字。"""
+    out = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(blob)) as z:
+            for n in z.namelist():
+                if n.endswith(".xml"):
+                    out.extend(_pptx_part_texts(z.read(n)))
+                elif n.endswith(".rels"):
+                    out.extend(_pptx_part_texts(z.read(n), rels=True))
+    except (zipfile.BadZipFile, OSError):
+        pass
+    return out
+
+
 def pptx_to_md(path: str) -> str:
-    """pptx → md：每张 slide 一节（### Slide N），保留表格。"""
+    """pptx → md：**全文字**提取（格式可损，文字零遗漏）。
+
+    输出结构：
+      ### Slide N            每张幻灯片全部文字（含文本框 / 表格 / 组合形状 / 字段）
+      #### <part 路径>       备注页 / 版式 / 母版 / 图表 / SmartArt / 批注 /
+                            docProps 元数据 / customXml / 其它含文字的 XML part
+      #### 嵌入包 <路径>     嵌入 xlsx / docx 内部文字
+      > 媒体文件提示         图片 / 音视频数量（其中文字需另行 OCR）
+    """
     with zipfile.ZipFile(path) as z:
+        names = z.namelist()
         slides = sorted(
-            [n for n in z.namelist() if re.match(r"ppt/slides/slide\d+\.xml$", n)],
+            [n for n in names if re.match(r"ppt/slides/slide\d+\.xml$", n)],
             key=lambda n: int(re.search(r"(\d+)", n).group(1)),
         )
         if not slides:
             raise ValueError(f"{path} 不是有效的 pptx（缺少 ppt/slides/slideN.xml）")
+
         parts = []
         for i, s in enumerate(slides, 1):
-            root = ET.fromstring(z.read(s))
-            text = _pptx_slide_text(root)
-            if text:
-                parts.append(f"### Slide {i}\n\n{text}")
+            texts = _pptx_part_texts(z.read(s))
+            parts.append(f"### Slide {i}\n\n" + ("\n".join(texts) if texts else "（无文字）"))
+
+        # 其余 XML part：按 part 名排序，逐节输出（有文字才输出）
+        others = sorted(n for n in names
+                        if n.endswith(".xml") and n not in set(slides)
+                        and not n.startswith("[Content_Types]"))
+        for n in others:
+            texts = _pptx_part_texts(z.read(n))
+            if texts:
+                parts.append(f"#### {n}\n\n" + "\n".join(texts))
+
+        # 外部链接（.rels）
+        links = []
+        for n in names:
+            if n.endswith(".rels"):
+                links.extend(_pptx_part_texts(z.read(n), rels=True))
+        if links:
+            parts.append("#### 外部链接\n\n" + "\n".join(links))
+
+        # 嵌入 OOXML 包
+        for n in names:
+            if n.lower().endswith(PPTX_EMBED_EXTS):
+                texts = _pptx_embedded_texts(z.read(n))
+                if texts:
+                    parts.append(f"#### 嵌入包 {n}\n\n" + "\n".join(texts))
+
+        media = [n for n in names if n.startswith("ppt/media/")]
+        if media:
+            parts.append("> 注：本文件含 %d 个媒体文件（图片 / 音视频），其中文字"
+                         "未由本转换器提取，如需请另行 OCR。" % len(media))
     return "\n\n".join(parts)
 
 

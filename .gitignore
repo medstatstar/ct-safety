@@ -65,3 +65,14 @@ Thumbs.db
 # ── 工作台整目录排除（2026-09-16 新增，§16.12）──
 # 工作台前端全部代码与文档（含发布元数据 app.config.json）不随技能发布。
 workbench/
+
+# ── F20/F27 顶层残留（本地运行产物 · 发布前检查自动补，与双 ignore 对齐）──
+.pytest_cache/
+.pytest_cache
+
+# ── ct-update 周检自动补齐（2026-11-03） ──
+browser_tests.py
+ctqa.config.json
+
+# ── 本地整改存档（2026-11-14：workbench/_bak_* 移出工作台，不随包）──
+_local_archive/

@@ -7,7 +7,7 @@
   </defs>
 
   <!-- 整体圆弧角方框（含柔和投影） -->
-  <rect x="-52" y="-52" width="104" height="104" rx="20" fill="#EEEDFE" stroke="#C5DCF5" stroke-width="0.5" transform="translate(52,52)" filter="url(#logoShadow)"/>
+  <rect x="-52" y="-52" width="104" height="104" rx="20" fill="#EAF2FB" stroke="#C5DCF5" stroke-width="0.5" transform="translate(52,52)" filter="url(#logoShadow)"/>
 
   <!-- 左上角统一文字（ct-* 系列通用） -->
   <g transform="translate(7,13)">
@@ -19,7 +19,7 @@
   <g transform="translate(54,66.5) scale(1.2) translate(-54,-66.5)">
     <!-- 盾牌（药物警戒 / 安全），边框加粗至 3 -->
     <path d="M54 38 L78 48 L78 67 C78 82 66 91 54 95 C42 91 30 82 30 67 L30 48 Z"
-          fill="#EEEDFE" stroke="#1C6DD0" stroke-width="3" stroke-linejoin="round"/>
+          fill="#EAF2FB" stroke="#1C6DD0" stroke-width="3" stroke-linejoin="round"/>
     <!-- 信号雷达（同心弧 + 中心点，橙红警示 = disproportionality 信号），红圈加粗 -->
     <g fill="none" stroke="#D85A30" stroke-linecap="round">
       <circle cx="54" cy="63" r="19" stroke-width="2" opacity="0.3"/>

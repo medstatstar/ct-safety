@@ -145,7 +145,10 @@ def run(drug, event, field, top, api_key, out_dir, with_cn_pv=False,
         naranjo_evidence=None, verify_signal=False, code_verbatim=None,
         prioritize=False, psur=False, psur_period=None,
         case_dedup=True, dedup_jaccard=0.8, drop_suspected_dupes=False,
-        lang="zh"):
+        lang="zh", source="faers"):
+    # 不良事件维度（器材模式为 event_type，药品模式为 reaction MedDRA PT）
+    ev_field = fetch_faers.SOURCE_DEFAULTS.get(source, {}).get(
+        "ev_field", "patient.reaction.reactionmeddrapt")
     # 预处理：非 ASCII 药物名 → 英文标准名（CLI 菜单确认）
     if resolve_drug_name and drug_name_resolver.is_non_ascii(drug):
         resolved, _ = drug_name_resolver.resolve(drug, event=event, auto=True)
@@ -303,7 +306,8 @@ def run(drug, event, field, top, api_key, out_dir, with_cn_pv=False,
     if top_events_signal:
         try:
             multi = _run_multi_event(drug, top_events_signal, field, top, api_key,
-                                      out_dir, date_from, date_to, continuity=continuity)
+                                      out_dir, date_from, date_to, continuity=continuity,
+                                      source=source, ev_field=ev_field)
             if multi:
                 md += _render_multi_event(multi)
         except Exception as e:
@@ -313,7 +317,7 @@ def run(drug, event, field, top, api_key, out_dir, with_cn_pv=False,
     if trend and event:
         try:
             trend_res = _run_trend(drug, event, field, api_key, out_dir,
-                                   date_from, date_to)
+                                   date_from, date_to, source=source, ev_field=ev_field)
             md += _render_trend(trend_res)
         except Exception as e:
             print("[WARN] trend detection failed (report continues): %s" % e)
@@ -327,7 +331,8 @@ def run(drug, event, field, top, api_key, out_dir, with_cn_pv=False,
     if verify_signal and event:
         try:
             verify_res = _run_verify_signal(drug, event, field, api_key, out_dir,
-                                            date_from, date_to, trend_res)
+                                            date_from, date_to, trend_res,
+                                            source=source, ev_field=ev_field)
             md += _render_verify(verify_res)
         except Exception as e:
             print("[WARN] signal verification failed (report continues): %s" % e)
@@ -381,6 +386,16 @@ def run(drug, event, field, top, api_key, out_dir, with_cn_pv=False,
                 res, fda_label_status=label_status, cn_pv_hits=cn_hits,
                 trend_flag=trend_flag, control_pair=control_pair)
             md += _render_score(score_res, label_status, drug, event)
+            # 2026-11-08: 同时落一份结构化评分产物，供工作台结果卡渲染。
+            # 此前 score_res 只被渲染进 Markdown 文本，工作台无法读取
+            # Safety Signal Score (0-100) 与证据分级 T1-T4。纯增量产物，
+            # 不改变任何 CLI 行为；写失败不影响主报告。
+            try:
+                with open(os.path.join(out_dir, "signal_score.json"), "w",
+                          encoding="utf-8") as fp:
+                    json.dump(score_res, fp, ensure_ascii=False, indent=2)
+            except Exception as e:
+                print("[WARN] signal score json write failed: %s" % e)
         except Exception as e:
             print("[WARN] signal score failed (report continues): %s" % e)
 
@@ -527,12 +542,19 @@ _NON_AE_HINTS = ("DEATH", "PROGRESSION", "RESISTANCE", "MUTATION", "OFF LABEL",
                 "DISEASE", "NEOPLASM", "TUMOUR", "TUMOR", "CONDITION", "LABEL")
 
 
+def _src_date_field(source):
+    """数据源的日期维度字段：FAERS=receivedate，MAUDE(device)=date_received。"""
+    cfg = getattr(fetch_faers, "SOURCE_DEFAULTS", {}) or {}
+    return (cfg.get(source) or {}).get("date_field", "receivedate")
+
+
 def _is_adverse_event(term):
     u = (term or "").upper()
     return not any(h in u for h in _NON_AE_HINTS)
 
 
-def _run_multi_event(drug, top_n, field, top, api_key, out_dir, date_from, date_to, continuity=True):
+def _run_multi_event(drug, top_n, field, top, api_key, out_dir, date_from, date_to,
+                     continuity=True, source="faers", ev_field=None):
     """R13: detect FAERS disproportionality for the focal drug's top adverse
     events (excluding terminal / disease-progression terms).
 
@@ -588,11 +610,13 @@ def _run_multi_event(drug, top_n, field, top, api_key, out_dir, date_from, date_
     data = json.load(open(fetch_json, encoding="utf-8"))
     drug_total = data.get("drug_total")
     grand_total = data.get("grand_total")
-    clause = fetch_faers._date_clause(date_from, date_to)
-    ev_field = "patient.reaction.reactionmeddrapt"
+    clause = fetch_faers._date_clause(date_from, date_to,
+                                      date_field=_src_date_field(source))
+    if ev_field is None:
+        ev_field = "patient.reaction.reactionmeddrapt"
     drug_term = '%s:"%s"%s' % (field, drug, clause)
     events = [e["term"] for e in data.get("top_events", [])
-              if _is_adverse_event(e.get("term"))][:top_n]
+              if (e.get("term") or "").strip() and _is_adverse_event(e.get("term"))][:top_n]
     rows = []
     for ev in events:
         if _time.time() - _START > _WALL_BUDGET:
@@ -691,13 +715,20 @@ def _render_benchmark(bench):
     return "\n".join(lines)
 
 
-def _run_trend(drug, event, field, api_key, out_dir, date_from, date_to):
-    """#5: fetch the (drug, event) monthly reporting series from FAERS (one
-    receivedate count facet), aggregate to quarters, and run anomaly detection
-    (CUSUM / rolling Z / changepoint). Writes trend.json."""
+def _run_trend(drug, event, field, api_key, out_dir, date_from, date_to,
+               source="faers", ev_field=None):
+    """#5: fetch the (drug, event) monthly reporting series (one receivedate count
+    facet), aggregate to quarters, and run anomaly detection (CUSUM / rolling Z /
+    changepoint). Writes trend.json. *ev_field* selects the adverse-event
+    dimension (reaction MedDRA PT for FAERS, event_type for MAUDE)."""
     import os as _os
+    if ev_field is None:
+        ev_field = "patient.reaction.reactionmeddrapt"
     monthly = time_series.fetch_monthly_series(drug, event, field, api_key,
-                                               date_from, date_to)
+                                               date_from, date_to,
+                                               fetch_mod=fetch_faers,
+                                               ev_field=ev_field,
+                                               date_field=_src_date_field(source))
     quarterly = time_series.to_quarterly(monthly)
     series = [q["count"] for q in quarterly]
     det = time_series.detect_anomaly(series)
@@ -744,17 +775,23 @@ def _render_trend(trend):
 # P1-C: signal verification workflow (temporal / dose-response / deconvolution)
 # ---------------------------------------------------------------------------
 def _run_verify_signal(drug, event, field, api_key, out_dir,
-                      date_from, date_to, trend_res=None):
+                      date_from, date_to, trend_res=None,
+                      source="faers", ev_field=None):
     """Fetch (or reuse) the (drug, event) quarterly reporting series and run the
     signal-verification workflow: temporal CUSUM/Poisson, dose-response and
     deconvolution. Dose-response & deconvolution need case-level data (--case-level)
     and report 'insufficient_data' when absent. Writes signal_verification.json."""
     import os as _os
+    if ev_field is None:
+        ev_field = "patient.reaction.reactionmeddrapt"
     if trend_res and trend_res.get("quarterly"):
         quarterly = trend_res["quarterly"]
     else:
         monthly = time_series.fetch_monthly_series(drug, event, field, api_key,
-                                                   date_from, date_to)
+                                                   date_from, date_to,
+                                                   fetch_mod=fetch_faers,
+                                                   ev_field=ev_field,
+                                                   date_field=_src_date_field(source))
         quarterly = time_series.to_quarterly(monthly)
     ts_data = [{"period": q["q"], "count": q["count"]} for q in quarterly]
     temporal = signal_verification.temporal_analysis(drug, event, ts_data)
@@ -1313,7 +1350,7 @@ def main():
                      "当前不可用。请检查 ct-safety/adapters/coze_dispatch.py 与端点配置。")
         enable_device_mode()
         if args.field == "patient.drug.medicinalproduct":
-            args.field = "patient.device.brand_name"
+            args.field = "device.brand_name"
         print("[ct-safety] 模式：MAUDE 器械不良事件（source=maude，维度=%s）" % args.field)
 
     # upgrade E: apply user SOC map (CLI --soc-map wins over env), before any
@@ -1333,8 +1370,12 @@ def main():
     except Exception as _e:  # noqa: BLE001 - extension must never break the run
         print("[WARN] upgrade-E extension not applied: %s" % _e)
 
-    # --validate-controls runs independently of any specific drug/event
-    if args.validate_controls:
+    # --validate-controls: standalone QA when no drug (early return), but when a
+    # drug is also given it becomes an *add-on* to the focal-drug analysis instead
+    # of short-circuiting it (workbench maps 对照验证 → --validate-controls, and
+    # expects the drug signal result too). Previously this branch always returned,
+    # which silently skipped the main FAERS pipeline whenever 对照验证 was on.
+    if args.validate_controls and not args.drug:
         _run_validate_controls(args.out_dir, args.api_key, args.field, args.top,
                                continuity=not args.no_continuity)
         return
@@ -1370,7 +1411,13 @@ def main():
         prioritize=args.prioritize, psur=args.psur, psur_period=args.psur_period,
         case_dedup=not args.no_case_dedup, dedup_jaccard=args.dedup_jaccard,
         drop_suspected_dupes=args.drop_suspected_dupes,
-        lang=args.lang)
+        lang=args.lang,
+        source=("maude" if getattr(args, "device", False) else "faers"))
+    # When 对照验证 (--validate-controls) is requested together with a focal drug,
+    # run it as an add-on *after* the main pipeline (rather than replacing it).
+    if args.validate_controls and args.drug:
+        _run_validate_controls(args.out_dir, args.api_key, args.field, args.top,
+                               continuity=not args.no_continuity)
 
 
 if __name__ == "__main__":

@@ -33,16 +33,24 @@ BASE = "https://api.fda.gov/drug/event.json"
 BASE_DEVICE = "https://api.fda.gov/device/event.json"
 
 # 数据源注册表：端点 + 默认维度字段 + 展示名。新增来源在此登记，默认 faers 行为不变。
+# field  = 检索主体维度（药物名 / 器械品牌名）
+# ev_field = 不良事件维度（FAERS 用 reaction MedDRA PT；MAUDE 用 event_type 分类，
+#           因 device/event.json 无 patient.reaction，事件以 Malfunction/Injury/Death/
+#           Other 等 event_type 表达）
 SOURCE_DEFAULTS = {
     "faers": {
         "base": BASE,
         "field": "patient.drug.medicinalproduct",
+        "ev_field": "patient.reaction.reactionmeddrapt",
+        "date_field": "receivedate",
         "label": "FAERS",
         "api_label": "openFDA drug/event.json",
     },
     "maude": {
         "base": BASE_DEVICE,
-        "field": "patient.device.brand_name",
+        "field": "device.brand_name",
+        "ev_field": "event_type",
+        "date_field": "date_received",
         "label": "MAUDE (device)",
         "api_label": "openFDA device/event.json",
     },
@@ -120,13 +128,18 @@ def _q(search, count=None, limit=1, api_key=None, skip=None):
     return params
 
 
-def _date_clause(date_from=None, date_to=None):
-    """Build an openFDA `receivedate` range clause (YYYYMMDD). Empty if no bounds."""
+def _date_clause(date_from=None, date_to=None, date_field="receivedate"):
+    """Build an openFDA date range clause (YYYYMMDD). Empty if no bounds.
+
+    *date_field* selects the date dimension: FAERS uses ``receivedate``, while
+    MAUDE device events use ``date_received`` (``receivedate`` does not exist in
+    device/event.json and makes the whole search 404).
+    """
     if not date_from and not date_to:
         return ""
     lo = date_from or "19000101"
     hi = date_to or "20991231"
-    return " AND receivedate:[%s TO %s]" % (lo, hi)
+    return " AND %s:[%s TO %s]" % (date_field, lo, hi)
 
 
 # openFDA occasionally returns 404 "NOT_FOUND / No matches found!" for VALID
@@ -189,7 +202,9 @@ def fetch_counts(drug, event=None, field=None, top=10, api_key=None, run=False,
               % (cfg["label"], drug, event))
         return None
 
-    clause = _date_clause(date_from, date_to)
+    date_field = cfg.get("date_field", "receivedate")
+    ev_field_cfg = cfg.get("ev_field", "patient.reaction.reactionmeddrapt")
+    clause = _date_clause(date_from, date_to, date_field=date_field)
 
     def total(search, timeout=timeout, retries=retries):
         j = _get_json(_q(search, limit=1, api_key=api_key), timeout=timeout,
@@ -197,7 +212,7 @@ def fetch_counts(drug, event=None, field=None, top=10, api_key=None, run=False,
         return int(j.get("meta", {}).get("results", {}).get("total", 0))
 
     def top_events(search, timeout=timeout, retries=retries):
-        j = _get_json(_q(search, count="patient.reaction.reactionmeddrapt.exact",
+        j = _get_json(_q(search, count=ev_field_cfg + ".exact",
                          limit=top, api_key=api_key), timeout=timeout,
                       retries=retries, base=base)
         return [{"term": x.get("term"), "count": x.get("count")}
@@ -224,7 +239,7 @@ def fetch_counts(drug, event=None, field=None, top=10, api_key=None, run=False,
     }
 
     if event:
-        ev_field = "patient.reaction.reactionmeddrapt"
+        ev_field = cfg.get("ev_field", "patient.reaction.reactionmeddrapt")
         pair_search = '%s AND %s:"%s"' % (drug_term, ev_field, event)
         pair = total(pair_search)
         event_total = total('%s:"%s"%s' % (ev_field, event, clause))
@@ -245,30 +260,43 @@ def fetch_counts(drug, event=None, field=None, top=10, api_key=None, run=False,
     return result
 
 
-def query_total(search, api_key=None, timeout=120, retries=3):
+def query_total(search, api_key=None, timeout=120, retries=3, source="faers"):
     """Module-level single openFDA total-count query. Used by the multi-event
     sweep to fetch only the pair (a) and event-total (c+a) counts per event,
     reusing the drug-total / grand-total already obtained once up front — this
     avoids the redundant top_events / repeated grand-total queries inside
     fetch_counts and keeps the per-event request count (and thus wall-clock)
     low enough to survive rate-limiting without stalling the whole run.
+
+    *source* selects the openFDA endpoint (default "faers" -> drug/event.json;
+    "maude" -> device/event.json) so the same helper works for both FAERS and
+    MAUDE without callers hard-coding an endpoint. Existing behaviour (drug
+    endpoint) is preserved when *source* is omitted.
     """
+    cfg = SOURCE_DEFAULTS.get(source)
+    base = cfg["base"] if cfg is not None else BASE
     j = _get_json(_q(search, limit=1, api_key=api_key), timeout=timeout,
-                  retries=retries)
+                  retries=retries, base=base)
     return int(j.get("meta", {}).get("results", {}).get("total", 0))
 
 
-def count_field(search, field, api_key=None, limit=1000, timeout=60):
+def count_field(search, field, api_key=None, limit=1000, timeout=60, source="faers"):
     """Run a single openFDA `count` facet query; return [{term, count}, ...].
 
     A failing facet (transient 404/500) must NOT abort the whole fast run, so
     errors are swallowed and an empty list is returned. NOTE: openFDA `count`
     ignores `limit` for some date fields (e.g. receivedate) and returns all
     buckets — the caller aggregates as needed.
+
+    *source* selects the openFDA endpoint (default "faers" -> drug/event.json;
+    "maude" -> device/event.json) so MAUDE trend/verify reuse this helper with
+    the correct endpoint.
     """
+    cfg = SOURCE_DEFAULTS.get(source)
+    base = cfg["base"] if cfg is not None else BASE
     try:
         j = _get_json(_q(search, count=field, limit=limit, api_key=api_key),
-                      api_key=api_key, timeout=timeout)
+                      api_key=api_key, timeout=timeout, base=base)
         # openFDA count results use `term` for most fields but `time` for
         # receivedate — normalize both to `term` so callers can rely on one key.
         return [{"term": x.get("term") or x.get("time"), "count": x.get("count")}
@@ -281,7 +309,8 @@ def count_field(search, field, api_key=None, limit=1000, timeout=60):
 
 def fetch_case_reports(drug, event=None, field="patient.drug.medicinalproduct",
                        n=20, api_key=None, run=False, out=None,
-                       date_from=None, date_to=None, timeout=120, retries=3):
+                       date_from=None, date_to=None, timeout=120, retries=3,
+                       source="faers"):
     """Individual case safety reports for a drug (optionally drug-event) pair.
 
     Returns a list of case dicts: {safetyreportid, safetyreportversion,
@@ -298,17 +327,26 @@ def fetch_case_reports(drug, event=None, field="patient.drug.medicinalproduct",
     manufacturer and consumer), which inflates raw case counts. These are
     extracted from the response already being fetched -- no extra request,
     no extra network traffic.
+
+    *source* selects the openFDA endpoint (default "faers" -> drug/event.json;
+    "maude" -> device/event.json) so MAUDE device case retrieval hits the
+    device library rather than the drug library.
     """
     if requests is None:
         raise RuntimeError("requests not installed: pip install requests")
+    cfg = SOURCE_DEFAULTS.get(source)
+    base = cfg["base"] if cfg is not None else BASE
+    src_label = (cfg["label"] if cfg is not None else "FAERS")
     if not run:
         print("[PREVIEW] would fetch up to %d case reports for drug=%r event=%r (use --run)"
               % (n, drug, event))
         return None
-    clause = _date_clause(date_from, date_to)
+    clause = _date_clause(date_from, date_to,
+                          date_field=cfg.get("date_field", "receivedate"))
+    ev_field = cfg.get("ev_field", "patient.reaction.reactionmeddrapt")
     drug_term = '%s:"%s"' % (field, drug)
     if event:
-        search = '%s AND patient.reaction.reactionmeddrapt:"%s"%s' % (drug_term, event, clause)
+        search = '%s AND %s:"%s"%s' % (drug_term, ev_field, event, clause)
     else:
         search = drug_term + clause
     # HARD LIMIT (single page, no pagination): this helper issues ONE request,
@@ -323,7 +361,8 @@ def fetch_case_reports(drug, event=None, field="patient.drug.medicinalproduct",
               "paginating path instead: scripts/fetch_reports.py --max <n> "
               "(hard cap %d, ~60s per 100-record page)."
               % (n, PAGE_MAX, PAGE_MAX, 10000))
-    j = _get_json(_q(search, limit=limit, api_key=api_key), timeout=timeout, retries=retries)
+    j = _get_json(_q(search, limit=limit, api_key=api_key), timeout=timeout,
+                  retries=retries, base=base)
     cases = []
     for rec in j.get("results", []):
         pat = rec.get("patient", {}) or {}
@@ -345,7 +384,7 @@ def fetch_case_reports(drug, event=None, field="patient.drug.medicinalproduct",
             "occurcountry": rec.get("occurcountry"),
             "reportercountry": src.get("reportercountry"),
         })
-    result = {"source": "FAERS", "drug": drug, "event": event,
+    result = {"source": src_label, "drug": drug, "event": event,
               "n_fetched": len(cases), "cases": cases}
     if out:
         with open(out, "w", encoding="utf-8") as f:

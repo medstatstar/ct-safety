@@ -1,0 +1,17 @@
+{
+  "generated_by": "ct-base/scripts/inject_references_shared.py",
+  "ct_base": "C:\\Users\\Wintone\\.workbuddy\\skills\\ct-base",
+  "skill": "ct-safety",
+  "files": [
+    "language_policy.md"
+  ],
+  "backups": [],
+  "unchanged": [
+    "language_policy.md"
+  ],
+  "skipped_exempt": [],
+  "skipped_not_referenced": [
+    "report_template.md"
+  ],
+  "timestamp": "2026-11-13T18:06:37.565653"
+}

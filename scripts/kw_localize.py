@@ -278,14 +278,22 @@ def localize(text, target_lang):
     low = text.lower()
     if low in _en2zh:
         return _en2zh[low], "term_map"
-    # phrase-level: longest English term first, case-insensitive substring replace
-    # (so multi-word terms like "brain metastasis" match as a whole).
+    # phrase-level: longest English term first, case-insensitive replace.
+    # 2026-10-23 修复：全部规则整词匹配（两侧非字母）。
+    # 此前按子串替换有两类误伤：
+    #   ① 类别后缀规则（'nib'→'替尼'、'mab'→'单抗'）把未收录新药名 Orebatinib
+    #      切成「Orebati替尼」还标 term_map「已验证」；
+    #   ② 缩写规则（'os'→OS、'as'→AS 等）命中普通单词内部（class→cl+AS+s、
+    #      osimertinib 前缀 os→总体生存）。
+    # 整词匹配对多词短语（"brain metastasis"）同样成立，且 "osimertinib-based"
+    # 这类连字符场景不受影响。
     result = text
     changed = False
     for en_term, zh_term in sorted(_en2zh.items(), key=lambda kv: -len(kv[0])):
         if not en_term:
             continue
-        pat = re.compile(re.escape(en_term), re.IGNORECASE)
+        pat = re.compile(r"(?<![A-Za-z])" + re.escape(en_term) + r"(?![A-Za-z])",
+                         re.IGNORECASE)
         if pat.search(result):
             result = pat.sub(zh_term, result)
             changed = True
