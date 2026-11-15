@@ -276,7 +276,7 @@ A: Because it is compliant crawling, not bulk scraping. Each source is queried t
 
 When the user asks for a *comparison*, switch to the comparative track: (1) data prep → (2) pick study style + workload → (3) metrics / comparators / robustness → (4) label every result with evidence tier. Hard rules: never run disproportionality on unprepared counts; always present all four configurations; forbid Tier-4 claims without external data.
 
-**Version**: v1.0.1 | **License**: MIT | **Authors**: medstatstar, phoe-zip
+**Version**: v1.0.2 | **License**: MIT | **Authors**: medstatstar, phoe-zip
 
 For feature requests, bug reports, or feedback: medstatstar@gmail.com (Wintone Zhang / 张文彤).
 
