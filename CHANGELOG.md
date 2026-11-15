@@ -1,7 +1,9 @@
-## v1.0.2 — 2026-11-15 · Loop 全自动发布（§16.22 live 轮次）
+## v1.0.2 — 2026-11-15 · SkillHub displayName 本地化修复
 
-- 版本锚点由 1.0.1 同步至 1.0.2（纯数值同步，未改触发词 / 双语文案 / 案例卡）。
-- 由 `ct-update/scripts/loop_version_bump.py` 在 live 预授权下自动执行；依据 `ct-base/docs/07 §16.22` 的 `version_bump=patch`。
+- **问题**：v1.0.1 Loop live 轮次发布 SkillHub 时，副本只跑了 `scrub_copy.py` 白名单裁剪，**漏跑 `localize_frontmatter.py`**，导致线上 `displayName` 仍为英文全称 `Clinical Trial Safety Signal / 临床试验安全信号专家`（其余 ct- 技能均为「中文名 (slug)」格式）。
+- **修复**：发布副本上补做 frontmatter 本地化——`displayName` → `临床试验安全信号专家 (ct-safety)`、`description` 去掉英文段只留中文；SkillHub 已重发 v1.0.2，线上核验通过。
+- **根因固化**：`ct-update/references/loop_publish_hook.json` 新增 `post_scrub_hooks.skillhub.localize_frontmatter`，`weekly_loop.py` 在 scrub 之后、publish 之前执行该平台专属后处理，杜绝再犯。
+- 版本锚点同步至 1.0.2（纯数值同步 + 上述修复说明，未改触发词 / 双语文案 / 案例卡）。
 
 ## v1.0.1 — 2026-11-15 · Loop 全自动发布（§16.22 live 轮次）
 
