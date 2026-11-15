@@ -21,7 +21,7 @@ Sheets (names also localized):
   2. 检索结果概要 / Summary   - 9 distribution bands (LEFT table + RIGHT chart):
                                  seriousness / sex / report type / country / age /
                                  annual trend / top reactions / top indications / drug role
-  3. 原始明细 / Raw           - one row per downloaded case (flattened key fields)
+  3. 个案明细 / Cases         - one row per downloaded case (unified 12-column template)
 
 Implementation: xlsxwriter (>=3.0), write-only. Charts float at adaptive pixel height.
 
@@ -64,6 +64,7 @@ except Exception:  # defensive fallback — vendored copy must be present
 # 单一真源 ct-base/scripts/xlsx_delivery.py（publish_inject 注入本目录）。
 # 交付物语言禁止回退到服务器 OS locale；契约见 references/xlsx_delivery.md。
 from xlsx_delivery import resolve_report_lang  # noqa: E402
+from xlsx_sheets import build_case_details  # noqa: E402
 
 
 # ---- shared Excel visual standard (vendored from ct-base) ------
@@ -604,38 +605,6 @@ def build_summary(wb, dists, fmts, fast=False):
     ws.merge_range(row + 1, 0, row + 4, 12, t("xlsx.safety.caveat"), fmts["warn"])
 
 
-def build_reports(wb, rows, fmts, fast=False):
-    ws = wb.add_worksheet(t("xlsx.sheet.raw"))
-    _page_decor(ws, t("xlsx.safety.doc_title"), fmts)
-    if not rows:
-        if fast:
-            ws.merge_range(2, 0, 2, 12, t("xlsx.safety.raw_fast_note"), fmts["note"])
-        # 空结果也要遵守 §F5：数据表带冻结首行 + 自动筛选（否则交付物机检误报）。
-        ws.freeze_panes(1, 0)
-        ws.autofilter(0, 0, 0, 0)
-        return
-    cols = list(rows[0].keys())
-    hfmt = fmts["header"]
-    ws.set_row(0, HEADER_H)  # unified header height (shared standard)
-    for ci, c in enumerate(cols):
-        ws.write(0, ci, c, hfmt)
-    for ri, rr in enumerate(rows, start=1):
-        # per-cell zebra (LIGHTRED + grey border) — matches the unified ct- standard
-        zebra = ((ri - 1) % 2 == 1)
-        for ci, c in enumerate(cols):
-            v = rr.get(c)
-            if c == "safetyreportid":
-                ws.write(ri, ci, v, fmts["raw_mono"])   # report ID → monospace (bordered)
-            elif c == "patientage":
-                ws.write(ri, ci, v, fmts["raw_num"])    # numeric → right-aligned (bordered)
-            else:
-                ws.write(ri, ci, v, fmts["zebra"] if zebra else fmts["plain"])
-    ws.freeze_panes(1, 0)
-    ws.autofilter(0, 0, len(rows), len(cols) - 1)
-    for ci, c in enumerate(cols):
-        ws.set_column(ci, ci, max(10, min(48, len(c) + 2)))
-
-
 def export_workbook(rows, out_path, meta=None, lang="auto", dists=None):
     """Render the 3-sheet FAERS workbook and save to ``out_path``.
     `dists` may be pre-supplied (fast/count mode); otherwise computed from rows."""
@@ -652,7 +621,7 @@ def export_workbook(rows, out_path, meta=None, lang="auto", dists=None):
     fmts = _make_formats(wb)
     build_readme(wb, rows, dists, meta, fmts)
     build_summary(wb, dists, fmts, fast=fast)
-    build_reports(wb, rows, fmts, fast=fast)
+    build_case_details(wb, fmts, rows)  # unified per-case sheet (mirrors report_xlsx)
     wb.close()
     return dists
 

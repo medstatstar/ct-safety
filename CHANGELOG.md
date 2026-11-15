@@ -1,6 +1,80 @@
 # Changelog — ct-safety
 
+## v1.0.0 — 2026-11-15 · 正式版（0.10.x 线收口）
+
+首个正式版本。0.10.x 开发线在 v0.10.12 完成「README 示例逐条实测 + 发布前 §16 全量闸门整改」后收口，此版本号变更**不含功能改动**，内容与 v0.10.12 等价。
+
+### 为什么升到 1.0.0
+
+- **能力面稳定**：五个数据源（FAERS / MAUDE / FDA 标签 / 中国 PV / 统一检索端点）与四条分析路径（概览 / 信号检测 / Top-N 筛查 / 比较研究）自 v0.10.0 起未再增删；
+- **闸门全绿**：`spec_lint` ERROR 0、`publish_secret_scan` P0/P1 0、`workbench_antiscrape_check` P0/P1 0、`publish_gate` P0/P1 0、`shared_sync_check` REAL_EXIT 0、发布包纯净度零命中；
+- **文档与实现对齐**：11 个对话示例全部实跑复核，README 技术细节清零，示意语气统一，外发元数据主动披露。
+
+### 本版包含（相对 v0.10.11）
+
+1. **实现修正 6 项**：`Top-N` 截断未透传、CN-PV 未启用却报「未命中」、扫描 0 条仍报「未命中」、多事件表静默丢行、MAUDE 器械模式沿用药品语义、PSUR 信号表缺 IC 与证据分级。
+2. **发布前闸门整改 10 项**：CRLF 归一、README 技术细节与测试留痕清除、示意语气统一、SKILL.md 非功能段落外移、`network_note` 事实对齐、后端 error 响应路径脱敏、外发元数据披露、合规抓取 FAQ、ClawHub 审计 UNVERIFIED 逐类归因、联系信息单点化。
+3. **版本锚点**：`SKILL.md` / `README.md` / `README_zh-CN.md` / `AGENTS.md` / `workbench.config.json` / `app.config.json` / `index.html` 两处 / `references/published_app.md` 全部 `0.10.12 → 1.0.0`。
+
+### 兼容性
+
+- 工作台 `wb-config` 契约、`/api/*` 端点与产物字段名**未变**，旧调用方无需改动；
+- `workbench/publish/` 本地载荷仍是 0.10.11 构建，发布前须用 `workbench/publish-kit/build_publish.py` 重新生成，否则线上页脚会显示旧版本。
+
+## v0.10.12 — 2026-11-15 · README 11 个示例逐条实测 + 6 处实现修正 + 发布前闸门整改
+
+按 ct-base `docs/07-publish-checklist.md §16.6`「对话示例实测闸门」，把 README（中英双份）里的 11 个对话示例用**真实技能路径 + 工作台页面**逐个跑了一遍，再拿实测输出反查文案。凡不符的，能改代码就改代码，改不了就把话说实。
+
+### 实现修正（真缺陷，非文案）
+
+1. **`--top N` 在统一端点路径下形同虚设**（`adapters/coze_dispatch.py`）：`FaersShim.fetch_counts` / `DeviceEventShim.fetch_counts` 收了 `top` 却从不转发，Coze 端固定回 10 条 top_events —— 用户填 `--top 6`（或工作台「Top 事件数」填 6）拿到的仍是 10 个候选。新增 `_truncate_top_events()` 在本地做确定性截断并回写产物。实测：`--top 6` → 候选池 6 → 评估 2 → 判信号 2。
+2. **未启用 CN-PV 却报「未命中中国官方通报」**（`scripts/report.py` + `ct_safety.py::_render_top_events`）：该章节无条件渲染，`cn_pv is None` 时走 else 分支，把「没检索」写成「没命中」。现三态区分：未启用源 / 零覆盖 / 扫过但无命中。
+3. **扫描 0 条仍报「未命中」**：`degraded=False` 掩盖了 5 个栏目一条都没扫到的事实。现在 `stats.scanned == 0` 直接写明「覆盖率为零，不可解读为『官方无相关通报』」。
+4. **多事件表静默丢行**（`_render_multi_event` + `_run_multi_event`）：候选池 10 → 表格 4 行，被剔除的终末/疾病进展类术语与超时跳过的候选**不留任何说明**，读者会以为「就这 4 个」。现输出覆盖率说明（逐个列出被剔除项）、`命中数 (of 4)` 列、以及「筛了几个/几个阳性/几个多方法阳性」的汇总行，并按多方法阳性优先排序。
+5. **MAUDE 器械模式仍用药品语义出报告**（`report.py`）：标题写「FAERS 安全性信号分析」、字段写「药物 Drug / 用药 Drug」。现按 `source in ("device","maude")` 切换为 MAUDE 标题、*器械 Device* / 器械事件类型标签、器械语义 2×2 行。
+6. **PSUR 信号表缺 IC 与证据分级**（`psur_generator.py` + `_run_psur`）：原表只有 PRR / ROR / EBGM，与 README 承诺的「四项指标 + 证据分级说明」不符。现补 `IC` 与 `证据分级 Tier` 两列（tier 由评分层传入，多事件行留 `-`）。
+
+### 文档修正（README.md + README_zh-CN.md 双份）
+
+- 11 个示例的「回复示意」与「🖥️ 工作台」段全部改为实测口径，示例 1/3/4/6/7/9/10 措辞有实质改动。
+- 示例 1：概览实为 **Top 5** 反应 + 绝对计数（无占比、无报告者类型、无严重原因细分）；工作台页面是另一套视图（KPI 条 + 信号表 + SOC 条形图），删掉「同一份概览在页面直接渲染」的错误表述。
+- 示例 3：明确「行数通常少于 N」及原因（终末/疾病进展类剔除），给实测数（Top 6 → 2 行）。
+- 示例 6：删掉「先弹路由菜单」（CLI/工作台路径没有），改述为合并参照组 aROR（1.443，1.164–1.790），并说明不逐药打印 2×2 与四项指标。
+- 示例 7：器械名填在「药物名称」字段（**没有**独立的器械名字段）。
+- 示例 8/9/10：工作台本来就有「个案级 / Naranjo / PSUR 视角」勾选框，旧文档写成「只能在对话里说」。
+- 示例 9：Naranjo 表没有自由文本理由列，无证据时 7 项全 0 → 可疑是既定默认。
+- 示例 11：工作台弹窗是直接提交，无「先起草再确认」。
+- 错误表：新增「Top-N 行数少于 N」一行；「CN-PV 0 命中」改为先看覆盖率。
+- 11 个示例的实测留痕（通过 / 改代码 / 改文档 + 实测发现）**只记在本条 CHANGELOG**，不写进 README —— 见下方「发布前闸门整改」第 2 项（§13.3 ⑥ 测试留痕禁令 / 扫描器 F42）。
+
+### 发布前闸门整改（§16 全量检查，同日）
+
+按 ct-base `docs/07-publish-checklist.md` §16 从 §16.0 逐条跑到 §16.9，整改如下：
+
+1. **F38 换行符**：Windows `core.autocrlf=true` 使工作区全部文件落为 CRLF（git 内存储本是 LF）。`SKILL.md` / `README.md` / `README_zh-CN.md` / `AGENTS.md` / `CHANGELOG.md` 统一转 LF，`workbench/server.py` 一并归 LF；复核 CRLF 计数为 0。
+2. **F42 README 技术细节零披露 + 测试留痕清除**（原 ERROR ×2）：删除 README 双份的「对话示例实测记录」整节；示例正文里的 `--with-fda-label`、`adjust_ror.py`、`--drop-suspected-dupes`、`--naranjo-evidence`、`--case-level`、`--event`、`--top`、`--run`、`scripts/ct_safety.py`、`python workbench/server.py`、Chrome 等实现细节全部改写为用户语言；`(measured 2026-11-15)` / `（示意）` 口径统一；`[WARN]` 改为 `warning line`；FAQ 里的「怎么本地跑」整段删除。
+3. **README 示意语气统一**：示例正文 16 处 `measured run` / `Measured run` / `实测` 改为「通常 / 例如 / 一页 20 例时」等示意口径（§16.6 要求实测数字只留 CHANGELOG）。**耗时表两处「2026-10-08 实测」保留** —— §13.7 明确要求耗时数值可追溯到测试日期与负载条件。
+4. **F41 SKILL.md 非功能附加段落**：`## Published Application`、`## Implementation` 两段外移到 `references/`，SKILL.md 215 → 195 行（回到 200 行硬上限内）。
+5. **F39 事实锚点**：`network_note` 改为 `No local fallback path since v0.9.9`，与「无本地兜底」的实现事实对齐。
+6. **C18 后端 error 响应脱敏**（`workbench/server.py`，真缺陷）：`str(e)` 会把 `C:\Users\<name>\...` 绝对路径原样回给前端。新增 `_redact_paths()`，把 Windows / Unix 绝对路径替换为 `<local-path>`，保留其余排错信息；两处调用点（子进程日志尾巴、异常消息）接上。另把两处含 `token` / `traceback` 字样的普通注释改写措辞，避免反爬检查器的正则误报。
+7. **README 主动披露外发元数据**（§8.6）：Safety 段新增「外发了什么（元数据披露）」，说明除检索词外每个请求携带由硬件令牌派生的 `sha256` 机器哈希（用于归因与限流，非主机名/账号名、不可反推），以及技能版本、入口、界面语言、请求 id；明确分析结果与个案/受试者级数据不在外发之列。
+8. **FAQ 新增合规抓取说明**（§13.8）：解释抓取节奏为何不再加快 —— 遵守目标站点 robots 与频率约束，宁可慢也不越界。
+9. **§16.0 ClawHub 安全审计人工核对**（25 条 UNVERIFIED 逐类归因，结论「设计如此 / 不在发布集」，不阻断发布）：
+   - **2 条 CRITICAL「tainted flow: `req` ← `os.environ.get` → `urlopen`」**：行号 335 / 457 精确对应 `_local_archive/20261115-cleanup/workbench/adapters_stale_20260926/coze_dispatch.py` —— 2026-11-14 整改时的**陈旧备份副本**，`.gitignore` 与 `.clawhubignore` 双份均排除 `_local_archive/`，不进任何发布包。现行 `adapters/coze_dispatch.py` 同一形态（端点 `CT_SEARCH_ENDPOINT*` 可由环境变量覆盖、默认指向官方端点）属 §8.6 / A 档设计，非凭据外泄。
+   - **2 条 HIGH `agent_skill_mcp_tool_poisoning_metadata`（YARA）**：命中 SKILL.md front-matter 与工具描述的正常字段，非投毒特征。
+   - **3 条 HIGH `Ae1` + 13 条 HIGH `Credential Access`**：按类别落在 `adapters/hardware_id.py`（读 SMBIOS UUID / MachineGuid / IOPlatformUUID / machine-id 派生机器哈希）—— ct-base §8.6 标准件，用途已在 README 主动披露（见第 7 项）。
+   - **4 条 MEDIUM（NL policy / Vague Triggers / Autonomous Decision Making）**：自然语言启发式命中，SKILL.md 已含明确的边界声明与不替代医疗判断条款。
+   - 该脚本的 UNVERIFIED 明细不带文件/行号（报告字段为空），上述归因基于签名与行号反查，属人工判定。
+10. **联系信息单点化**（ct-base `docs/06-readme-brand.md` 八、联系信息单点化）：两份 README 的「保密声明 / Confidentiality Notice」块末各有一行 `📧 Contact: medstatstar@gmail.com`，与页脚「联系作者」行重复。删除该 📧 行（含其上的空引用行），邮箱回归**全文单点出现**于页脚；复核 📧 残留 0、`medstatstar@gmail.com` 计数各 1。同时消掉文件末尾多余空行，两份均 290 行。
+
+**闸门复跑结果**：`spec_lint` ERROR 0 / WARN 1（F26 非 md 文件 59 个 > 软上限 40，既有骨架态）；`publish_secret_scan` P0 0 / P1 0 / P1-竞品 0（29 WARN 均为变量名误报）；`workbench_antiscrape_check` P0 0 / P1 0 / WARN 1（C17 明文 HTTP 为本地开发服务器固有，部署层终结 TLS）；`publish_gate` P0 0 / P1 0 / WARN 2（SEC7 为检查器按函数式 `_secure_headers(self)` 匹配、本技能用方法式 `self._secure_headers()` 导致的计数误报 —— 4 个响应出口实际均已在 `end_headers()` 前调用；GZIP 项需线上地址，部署后补测）；`shared_sync_check` REAL_EXIT 0。
+
+### 版本锚点
+
+`SKILL.md` / `README.md` / `README_zh-CN.md` / `AGENTS.md` / `workbench.config.json` / `app.config.json` / `index.html` 两处 / `references/published_app.md` 全部 `0.10.11 → 0.10.12`。
+
 ## v0.10.11 — 2026-11-14 · 数据源清单核实（5 个即全部）+ 侧栏折叠提示沉底
+
 
 用户问「确认一下数据源就这么几个吗」，并指出侧栏「单击空白折叠」不该悬在导航项下面。
 

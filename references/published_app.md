@@ -23,16 +23,16 @@
 > **本技能没有犯 ct-registry 的错**：`publishDir` 在 SKILL.md、构建脚本、`app.config.json` 三处都是
 > `workbench/publish`。ct-literature 用 `publish-dist` 是它自己的病史（跨 workspace 误绑），不要照抄。
 
-## Version anchors（2026-11-14 统一到 0.10.11）
+## Version anchors（2026-11-15 统一到 1.0.0）
 
 | 位置 | 值 |
 |---|---|
-| `SKILL.md` front-matter `version` | `0.10.11` |
-| `CHANGELOG.md` 首条 | `v0.10.11 — 2026-11-14 数据源清单核实 + 侧栏提示沉底` |
-| `workbench/workbench.config.json` `version` | `0.10.11` — **页脚主来源**（`/api/config` 直读本文件） |
-| `workbench/app.config.json` `version` | `0.10.11` |
-| `workbench/index.html` 内嵌 `WB_CFG.version` | `0.10.11`（后端不可达时的兜底配置） |
-| `workbench/index.html` `wbRenderFooter()` fallback | `0.10.11`（连内嵌配置都没有时的最后兜底） |
+| `SKILL.md` front-matter `version` | `1.0.0` |
+| `CHANGELOG.md` 首条 | `v1.0.0 — 2026-11-15 正式版（0.10.x 线收口）` |
+| `workbench/workbench.config.json` `version` | `1.0.0` — **页脚主来源**（`/api/config` 直读本文件） |
+| `workbench/app.config.json` `version` | `1.0.0` |
+| `workbench/index.html` 内嵌 `WB_CFG.version` | `1.0.0`（后端不可达时的兜底配置） |
+| `workbench/index.html` `wbRenderFooter()` fallback | `1.0.0`（连内嵌配置都没有时的最后兜底） |
 
 > 页脚版本链路：`wbRenderFooter()` → `WB_CFG.version` → `/api/config` → `workbench.config.json`。
 > 2026-11-08 之前 4 处写死 `0.1.0`，用户天天看到 `v0.1.0` 而技能已到 0.10.7。
@@ -67,12 +67,14 @@
 | v0.10.9 视觉审查整改（A 组规范硬项 / B 组可用性） | 表单 label 13px；未选数据源卡不再半透明；顶栏状态胶囊按 §19.2 color-mix 冻结配方（深底白字四态可辨，非白底+语义色）；内容区居中限宽 1280；SOC 条形图可见 |
 | v0.10.10 数据源页语义纠正（源说明 / 产出核对分离） | 数据源页先列 5 个源（主源+附加源）与判定口径；产出核对按抓取/分析/导出分组，未勾选项显示「未启用」而非「未产出」；失联运行只显示一条失败摘要+异常行 |
 | v0.10.11 数据源清单核实 + 侧栏提示沉底 | 数据源表下有一行脚注说明「5 个即全部，佐证源 3 个与阻断源 6 个不在本页链路」；侧栏「单击空白折叠」贴在侧栏最底部而非紧跟导航项 |
+| v0.10.12 Top-N 截断 / 覆盖率说明 / 器械语义 / PSUR 补列 | *Top 事件数* 填 6 时候选池真的只有 6；多事件表出现覆盖率说明与被剔除项清单；MAUDE 模式标题为器械语义；PSUR 信号表含 IC 与证据分级列 |
+| v1.0.0 正式版（版本号收口，无功能改动） | 线上页脚显示 `v1.0.0`；`/api/config` 返回 `version = 1.0.0`；载荷须用 `publish-kit/build_publish.py` 重新构建 |
 
 > ⚠️ 这些改动**只重建了本地载荷，尚未执行线上覆盖发布**。
 
 ## 部署后冒烟清单
 
-- `/api/config` → `version = 0.10.11`；页脚 `v0.10.11`
+- `/api/config` → `version = 1.0.0`；页脚 `v1.0.0`
 - `/api/health` → `ok: true`；`/api/source-health` → `has_run` 与 9 项产物（含 group / applicable 字段）
 - 首页含 `wb-cthome`（返回 CT 首页钮）/ `wb-plan-mount` / `wb-src-health`；出站端点信息在 `srcLockTip` 悬停提示（含 `ct-search.coze.site`），无独立披露横幅；无 `maode`、无「恒开直连」
 - 单事件检索（如 `osimertinib` + `pneumonitis`）→ 结果卡出现评分卡；多事件检索 → 出现「需填写聚焦事件」说明而非伪造分数

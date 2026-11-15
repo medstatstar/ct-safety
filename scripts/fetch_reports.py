@@ -77,10 +77,13 @@ def _extract(report):
     """Flatten one FAERS report into a small dict of case-level fields."""
     out = {}
     out["safetyreportid"] = report.get("safetyreportid")
+    out["safetyreportversion"] = report.get("safetyreportversion")
     out["receivedate"] = report.get("receivedate")
     out["serious"] = report.get("serious")
     out["reporttype"] = report.get("reporttype")
     out["primarysourcecountry"] = report.get("primarysourcecountry")
+    out["occurcountry"] = report.get("occurcountry")
+    out["reportercountry"] = report.get("reportercountry")
     patient = report.get("patient") or {}
     out["patientsex"] = patient.get("patientsex")
     out["patientage"] = patient.get("patientage")
@@ -90,14 +93,21 @@ def _extract(report):
         [r.get("reactionmeddrapt", "") for r in reactions if r.get("reactionmeddrapt")]
     )
     drugs = patient.get("drug") or []
-    chars, inds = [], []
+    names, chars, inds = [], [], []
     for d in drugs:
+        nm = d.get("medicinalproduct")
+        if nm:
+            names.append(nm)
         ch = d.get("drugcharacterization")
         if ch is not None:
             chars.append(str(ch))
         ind = d.get("drugindication")
         if ind:
             inds.append(ind)
+    # `drug` (medicinalproduct names) is the SAME semantic as the interactive
+    # template's 合并用药 column; xlsx_sheets._norm_case prefers it over the
+    # characterization/indication fallbacks → the two Excel templates converge.
+    out["drug"] = "; ".join(names)
     out["drug_characterizations"] = "; ".join(chars)  # 1=怀疑药 2=合并药 3=相互作用
     out["drug_indications"] = "; ".join(inds)
     return out

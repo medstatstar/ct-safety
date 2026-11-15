@@ -41,6 +41,7 @@ from i18n import t, set_lang
 
 # 阶段 2：交付语言解析统一走 ct-base 共享件（单一真源，publish_inject 注入本目录）。
 from xlsx_delivery import resolve_report_lang
+from xlsx_sheets import build_case_details as _build_case_details  # noqa: E402
 
 PAL = PALETTES["safety"]
 _SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -196,6 +197,7 @@ def _build_readme(wb, fmts, drug, event, disp_res):
     sheets = [
         t("xlsx.signal.guide.summary"),
         t("xlsx.signal.guide.raw"),
+        t("xlsx.signal.guide.cases"),
         t("xlsx.signal.guide.label"),
         t("xlsx.signal.guide.cnpv"),
         t("xlsx.signal.guide.score"),
@@ -398,8 +400,6 @@ def _build_raw_counts(wb, fmts, fetch_data, disp_res):
 
     ws.freeze_panes(1, 0)
     return ws
-
-
 # ════════════════════════════════════════════════════════════════════
 # FDA_Label
 # ════════════════════════════════════════════════════════════════════
@@ -558,7 +558,8 @@ def _build_score(wb, fmts, score_res):
 # ════════════════════════════════════════════════════════════════════
 # Entry point
 # ════════════════════════════════════════════════════════════════════
-def build_signal_xlsx(out_path, *, drug, event, fetch_data, disp_res=None,
+def build_signal_xlsx(out_path, *, drug, event, fetch_data, cases_data=None,
+                      disp_res=None,
                       cn_pv=None, label_data=None, label_status=None,
                       score_res=None, lang=None):
     # Workbook language must not depend on the server OS: the old
@@ -572,6 +573,8 @@ def build_signal_xlsx(out_path, *, drug, event, fetch_data, disp_res=None,
     _build_readme(wb, fmts, drug, event, disp_res)
     _build_summary(wb, fmts, drug, event, fetch_data, disp_res)
     _build_raw_counts(wb, fmts, fetch_data, disp_res)
+    if cases_data:
+        _build_case_details(wb, fmts, cases_data, lang)
 
     if label_data is not None:
         _build_fda_label(wb, fmts, label_data, label_status, event)

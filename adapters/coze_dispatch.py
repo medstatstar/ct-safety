@@ -691,6 +691,36 @@ def dispatch_stream(source, drug, event=None, date_from=None, date_to=None,
 # Coze；本地计算（check_event / _date_clause）与未外发的辅助检索（query_total /
 # fetch_case_reports）保留本机直连。通过 rebind 模块全局名实现，调用点零改动。
 # ═════════════════════════════════════════════════════════════════════════════
+def _truncate_top_events(res, top, out):
+    """按调用方 --top 截断 top_events（Coze 端固定返回 10 条）。
+
+    统一端点不接收 top 参数，此前 `--top N`（含工作台「Top 事件数」）在统一端点
+    路径下形同虚设——无论填几，报告里始终是 10 条。这里在本地做确定性截断，
+    保证「用户说 top N」与「表里 N 行」一致；被截掉的候选仍在服务端原始响应中，
+    需要时可调大 --top 重跑。
+    """
+    if not isinstance(res, dict):
+        return res
+    try:
+        n = int(top)
+    except (TypeError, ValueError):
+        return res
+    if n <= 0:
+        return res
+    te = res.get("top_events")
+    if not isinstance(te, list) or len(te) <= n:
+        return res
+    res["top_events"] = te[:n]
+    res["top_requested"] = n
+    if out:
+        try:
+            with open(out, "w", encoding="utf-8") as f:
+                json.dump(res, f, ensure_ascii=False, indent=2)
+        except Exception as e:  # noqa: BLE001 - 截断失败不应中断主流程
+            print("[coze-dispatch] 截断 top_events 后写盘失败: %s" % e, file=sys.stderr)
+    return res
+
+
 class FaersShim:
     """fetch_faers 的薄垫片：fetch_counts → Coze；其余保留本机直连。"""
 
@@ -702,8 +732,9 @@ class FaersShim:
                      top=10, api_key=None, run=False, out=None,
                      date_from=None, date_to=None, timeout=120, retries=3):
         # Coze 服务端用默认 field；忽略本地 api_key/retries（服务端自有 key/重试）
-        return dispatch("faers", drug, event, date_from=date_from, date_to=date_to,
-                        run=run, out=out, timeout=max(int(timeout), 120))
+        res = dispatch("faers", drug, event, date_from=date_from, date_to=date_to,
+                       run=run, out=out, timeout=max(int(timeout), 120))
+        return _truncate_top_events(res, top, out)
 
     def query_total(self, search, api_key=None, timeout=120, retries=3):
         # 文档化例外：openFDA 任意检索式，结构化 state 无法承载 → 本机直连
@@ -740,8 +771,9 @@ class DeviceEventShim:
                      run=False, out=None, date_from=None, date_to=None,
                      timeout=120, retries=3):
         # Coze maude 节点用器械默认维度；忽略本地 field/api_key/retries
-        return dispatch("maude", drug, event, date_from=date_from, date_to=date_to,
-                        run=run, out=out, timeout=max(int(timeout), 120))
+        res = dispatch("maude", drug, event, date_from=date_from, date_to=date_to,
+                       run=run, out=out, timeout=max(int(timeout), 120))
+        return _truncate_top_events(res, top, out)
 
     def query_total(self, search, api_key=None, timeout=120, retries=3):
         # MAUDE 器械模式：配对/事件总数经 device/event.json（与 FaersShim 的

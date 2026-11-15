@@ -72,7 +72,7 @@ def enable_device_mode():
     return fetch_faers
 
 
-def _render_top_events(data, drug, cn_pv=None):
+def _render_top_events(data, drug, cn_pv=None, source="faers"):
     """Top-events-only report when no --event is supplied (no 2x2 disproportionality)."""
     drug_total = data.get("drug_total")
     top_ev = data.get("top_events", []) or []
@@ -81,16 +81,21 @@ def _render_top_events(data, drug, cn_pv=None):
     win = ""
     if date_from or date_to:
         win = "（时间窗 %s ~ %s）" % (date_from or "…", date_to or "…")
+    _dev = (source in ("device", "maude"))
     lines = []
-    lines.append("# FAERS 安全性信号分析 / FAERS Safety Signal\n")
-    lines.append("- 药物 Drug: **%s**" % drug)
+    lines.append("# MAUDE 器械不良事件概览 / MAUDE Device Event Overview\n" if _dev
+                 else "# FAERS 安全性信号分析 / FAERS Safety Signal\n")
+    lines.append("- %s: **%s**" % ("器械 Device" if _dev else "药物 Drug", drug))
     lines.append("- 事件 Event: **（未指定 — 仅列高频不良事件，未做信号检测）**")
-    lines.append("- 数据源 Source: FDA FAERS (openFDA public API)")
+    lines.append("- 数据源 Source: FDA MAUDE (openFDA device/event.json)" if _dev
+                 else "- 数据源 Source: FDA FAERS (openFDA public API)")
     if win:
         lines.append("- 时间窗 Date window: **%s**" % win)
-    lines.append("- 该药报告总数 Drug total reports: **%s**%s\n" % (
+    lines.append("- %s: **%s**%s\n" % (
+        "该器械报告总数 Device total reports" if _dev else "该药报告总数 Drug total reports",
         (drug_total if drug_total is not None else "?"), win))
-    lines.append("## 高频不良事件 Top adverse events (MedDRA PT)\n")
+    lines.append("## 高频不良事件 Top adverse events%s\n" % (
+        "（器械事件类型 / device event type）" if _dev else " (MedDRA PT)"))
     if top_ev:
         lines.append("| 不良事件 Reaction (MedDRA PT) | SOC | 报告数 Count |")
         lines.append("|---|---|---|")
@@ -129,9 +134,20 @@ def _render_top_events(data, drug, cn_pv=None):
                 h.get("tier") or "-", h.get("date") or "-", h.get("column", "-"),
                 title, ", ".join(h.get("matched_keywords", [])), h.get("url", "")))
     else:
-        lines.append("未命中中国官方通报（当前 `--cn-max-pages` 页 / `--cn-since` 日期窗内）。"
-                     "如需更广覆盖，可增大 `--cn-max-pages`、放宽 `--cn-since`，"
-                     "或显式传入中文事件词 `--event-cn`。")
+        st = (cn_pv or {}).get("stats") or {}
+        scanned = st.get("scanned", 0)
+        if cn_pv is None:
+            lines.append("未启用中国 PV 源（`--with-cn-pv`，或工作台勾选「中国药物警戒」）——"
+                         "本节不参与本次分析，**不代表检索后零命中**。")
+        elif scanned == 0:
+            lines.append("**本次未扫描到任何通报条目（扫描 0 条 / %d 栏目）——覆盖率为零，"
+                         "不可解读为「官方无相关通报」**；多为站点结构变更或网络受限所致，"
+                         "请重跑或补中文事件词后复核。"
+                         % len(cn_pv.get("searched_columns") or []))
+        else:
+            lines.append("未命中中国官方通报（已扫描 %d 条，当前 `--cn-max-pages` 页 / `--cn-since` 日期窗内）。"
+                         "如需更广覆盖，可增大 `--cn-max-pages`、放宽 `--cn-since`，"
+                         "或显式传入中文事件词 `--event-cn`。" % scanned)
     return "\n".join(lines)
 
 
@@ -252,10 +268,10 @@ def run(drug, event, field, top, api_key, out_dir, with_cn_pv=False,
                         "NMPA通报", 0) + nmpa_res["hit_count"]
 
     if res is not None:
-        md = report_mod.render(res, cn_pv=cn_pv)
+        md = report_mod.render(res, cn_pv=cn_pv, source=source)
     else:
         # no event -> top adverse events only, no 2x2 disproportionality
-        md = _render_top_events(data, drug, cn_pv=cn_pv)
+        md = _render_top_events(data, drug, cn_pv=cn_pv, source=source)
 
     # ② case_id linkage (R14): fetch individual FAERS case safety reports when requested
     cases_data = None
@@ -354,6 +370,7 @@ def run(drug, event, field, top, api_key, out_dir, with_cn_pv=False,
         print("[WARN] --compare-drugs requires --event; skipped")
 
     # #4: composite Safety Signal Score + evidence tier (FAERS x FDA Label x CN-PV)
+    score_res = None
     if res is not None and event:
         try:
             label_status = "skipped"
@@ -417,7 +434,7 @@ def run(drug, event, field, top, api_key, out_dir, with_cn_pv=False,
     if psur and res is not None and event:
         try:
             psur_md = _run_psur(drug, event, res, multi, prio,
-                                psur_period or "latest", out_dir)
+                                psur_period or "latest", out_dir, score_res)
             if psur_md:
                 md += "\n\n" + psur_md
         except Exception as e:
@@ -479,7 +496,8 @@ def run(drug, event, field, top, api_key, out_dir, with_cn_pv=False,
     xlsx_out = os.path.join(out_dir, "faers_report.xlsx")
     try:
         report_xlsx.build_signal_xlsx(
-            xlsx_out, drug=drug, event=event, fetch_data=data, disp_res=res,
+            xlsx_out, drug=drug, event=event, fetch_data=data,
+            cases_data=cases_data, disp_res=res,
             cn_pv=cn_pv,
             label_data=label_data if (with_fda_label and res is not None and event) else None,
             label_status=label_status if (with_fda_label and res is not None and event) else None,
@@ -617,6 +635,9 @@ def _run_multi_event(drug, top_n, field, top, api_key, out_dir, date_from, date_
     drug_term = '%s:"%s"%s' % (field, drug, clause)
     events = [e["term"] for e in data.get("top_events", [])
               if (e.get("term") or "").strip() and _is_adverse_event(e.get("term"))][:top_n]
+    # 候选池口径留痕：池大小 / 被剔除的术语 / 实际筛查数，供报告显式披露
+    _pool_terms = [e["term"] for e in data.get("top_events", []) if (e.get("term") or "").strip()]
+    _dropped_terms = [t for t in _pool_terms if not _is_adverse_event(t)]
     rows = []
     for ev in events:
         if _time.time() - _START > _WALL_BUDGET:
@@ -653,7 +674,11 @@ def _run_multi_event(drug, top_n, field, top, api_key, out_dir, date_from, date_
         for _r, _q in zip(_avail, _qs):
             _r["fdr_q"] = round(_q, 6)
             _r["fdr_signal"] = _q < 0.05
-    multi = {"drug": drug, "events": rows}
+    multi = {"drug": drug, "events": rows,
+             "pool_size": len(_pool_terms),
+             "dropped_terms": _dropped_terms,
+             "screened": len(events),
+             "requested": top_n}
     out = _os.path.join(out_dir, "multi_event_disp.json")
     with open(out, "w", encoding="utf-8") as f:
         json.dump(multi, f, ensure_ascii=False, indent=2)
@@ -665,11 +690,21 @@ def _render_multi_event(multi):
     rows = [r for r in multi.get("events", []) if r.get("available")]
     if not rows:
         return "\n\n## 主药多事件安全性信号 (R13)\n\n_（无可用数据）_\n"
+
+    def _n_fired(r):
+        """How many of the four methods fired for this event."""
+        return sum(1 for k in ("ROR", "PRR", "IC", "EBGM")
+                   if (r.get(k) or {}).get("signal"))
+
+    # 多方法阳性优先，其次按报告数；便于「先看最像信号的」
+    rows = sorted(rows, key=lambda r: (-_n_fired(r), -(r["table"]["a"])))
+
     lines = ["\n\n## 主药多事件安全性信号 (R13) / Multi-Event Safety Signals\n"]
     lines.append("药物 Drug: **%s**（各 AE 相对全库自发报告的信号强度；"
-                 "判定 ROR_lb>1 / PRR≥2&χ²≥4 / IC025>0）\n" % multi.get("drug"))
-    lines.append("| 不良事件 Event | SOC | a | ROR (95% CI) | PRR (χ²) | IC025 | EBGM(EB05) | FDR(q) | 信号 Signal |")
-    lines.append("|---|---|---|---|---|---|---|---|---|")
+                 "判定 ROR_lb>1 / PRR≥2&χ²≥4 / IC025>0 / EB05≥2，任一阳性即「信号=是」）\n"
+                 % multi.get("drug"))
+    lines.append("| 不良事件 Event | SOC | a | ROR (95% CI) | PRR (χ²) | IC025 | EBGM(EB05) | FDR(q) | 命中数 (of 4) | 信号 Signal |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|")
     for r in rows:
         a = r["table"]["a"]
         ror = r["ROR"]; prr = r["PRR"]; ic = r["IC"]; eb = r.get("EBGM") or {}
@@ -677,10 +712,34 @@ def _render_multi_event(multi):
         q = r.get("fdr_q")
         fdr_disp = ("%.4f" % q) if q is not None else "—"
         sig = "是" if r["signal_overall"] else "否"
-        lines.append("| %s | %s | %s | %.2f (%.2f–%.2f) | %.2f (%.0f) | %.2f | %.2f(%.0f) | %s | %s |" % (
+        lines.append("| %s | %s | %s | %.2f (%.2f–%.2f) | %.2f (%.0f) | %.2f | %.2f(%.0f) | %s | %d | %s |" % (
             r["event"], soc, int(a), ror["value"], ror["ci_low"], ror["ci_high"],
             prr["value"], prr["chi2"], ic["ci_low"], eb.get("value", 0.0), eb.get("eb05", 0.0),
-            fdr_disp, sig))
+            fdr_disp, _n_fired(r), sig))
+    _pos = sum(1 for r in rows if r["signal_overall"])
+    _multi = sum(1 for r in rows if _n_fired(r) >= 2)
+    lines.append("\n**小结 Summary:** 本次实际筛查 **%d** 个事件，其中 **%d** 个判定为信号阳性，"
+                 "**%d** 个为多方法（≥2 法）同时阳性。" % (len(rows), _pos, _multi))
+
+    # 候选池 -> 实际筛查 的差额必须显式说明，否则读者会把「少了几个」误读为「只有这几个」
+    _pool = multi.get("pool_size")
+    _dropped = multi.get("dropped_terms") or []
+    _unavail = [r["event"] for r in multi.get("events", []) if not r.get("available")]
+    if _pool is not None and _pool > len(rows):
+        _why = []
+        if _dropped:
+            _why.append("剔除终末/疾病进展类等非特异性术语 %d 个（%s）"
+                        % (len(_dropped), "、".join(_dropped[:8])
+                           + ("…" if len(_dropped) > 8 else "")))
+        if _unavail:
+            _why.append("查询超时/计数不一致未取得结果 %d 个（%s）"
+                        % (len(_unavail), "、".join(_unavail[:8])
+                           + ("…" if len(_unavail) > 8 else "")))
+        if _why:
+            lines.append("\n> ⚠️ **覆盖率 Coverage:** 候选事件池 %d 个 → 实际进入表格 %d 个；%s。"
+                         "被剔除项仍可能是有意义的信号，需人工复核或单独指定 `--event`。"
+                         % (_pool, len(rows), "；".join(_why)))
+
     lines.append("\n> 多事件信号仅作横向参考，各事件报告量/临床意义不同；FDR(q) 为 Benjamini-Hochberg "
                  "多重比较校正后的 q 值，q<0.05 表示该信号在整体错误发现率控制下仍显著。"
                  "PNEUMONITIS 等特异性信号须结合 RCT 与标签解读，非因果结论。")
@@ -925,7 +984,7 @@ def _render_prioritize(results, drug):
 # ---------------------------------------------------------------------------
 # P1-F: PSUR/PBRER auto-report generation
 # ---------------------------------------------------------------------------
-def _run_psur(drug, event, res, multi, prio, period, out_dir):
+def _run_psur(drug, event, res, multi, prio, period, out_dir, score_res=None):
     """Build a signal list (single + multi-event) and generate a PSUR/PBRER
     markdown report. Risk tier from the prioritization layer (P1-E) when available.
     Writes psur.md."""
@@ -937,9 +996,14 @@ def _run_psur(drug, event, res, multi, prio, period, out_dir):
         prr = (r.get("PRR") or {}).get("value")
         ror = (r.get("ROR") or {}).get("value")
         ebgm = (r.get("EBGM") or {}).get("value")
+        ic = (r.get("IC") or {}).get("value")
+        # 证据分级 T1-T4 只在焦点药-事件上有（综合评分层产出），多事件行留空
+        tier = None
+        if score_res and ev == event:
+            tier = score_res.get("tier") or score_res.get("evidence_tier")
         return {
             "drug": d, "event": ev,
-            "prr": prr, "ror": ror, "ebgm": ebgm,
+            "prr": prr, "ror": ror, "ebgm": ebgm, "ic": ic, "tier": tier,
             "status": "new",
             "risk_level": p.get("risk_level", "MEDIUM"),
             "action": p.get("action_recommendation", "常规评估"),

@@ -15,20 +15,28 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import disproportionality
 
 
-def render(res, cn_pv=None):
+def render(res, cn_pv=None, source="faers"):
     drug = res.get("drug", "?")
     event = res.get("event", "?")
     tbl = res["table"]
     ror = res["ROR"]; prr = res["PRR"]; ic = res["IC"]
     sig = "⚠️ 信号阳性" if res.get("signal_overall") else "无显著信号"
+    # 器械模式（MAUDE）走同一套 2×2 口径，但标题与行列标签必须是器械语义，
+    # 否则读者会把器械报告误读成药品报告（二者绝不合并计数）。
+    _dev = (source in ("device", "maude"))
+    _title = ("# MAUDE 器械不良事件信号分析 / MAUDE Device Event Signal\n" if _dev
+              else "# FAERS 安全性信号分析 / FAERS Safety Signal\n")
+    _src = ("- 数据源 Source: FDA MAUDE (openFDA device/event.json)"
+            if _dev else "- 数据源 Source: FDA FAERS (openFDA public API)")
 
     lines = []
-    lines.append("# FAERS 安全性信号分析 / FAERS Safety Signal\n")
-    lines.append("- 药物 Drug: **%s**" % drug)
-    lines.append("- 事件 Event (MedDRA PT): **%s**" % event)
+    lines.append(_title)
+    lines.append("- %s: **%s**" % ("器械 Device" if _dev else "药物 Drug", drug))
+    lines.append("- %s: **%s**" % (
+        "事件 Event (器械事件类型 device event type)" if _dev else "事件 Event (MedDRA PT)", event))
     soc = disproportionality.map_soc(event) if event else "—"
     lines.append("- 系统器官分类 SOC: **%s**" % soc)
-    lines.append("- 数据源 Source: FDA FAERS (openFDA public API)")
+    lines.append(_src)
     cont = res.get("continuity")
     lines.append("- 连续性校正 Continuity: **%s**" % (
         "已启用 Haldane-Anscombe (+0.5/格)" if cont else "未启用（可用 --no-continuity 复现 v0.1.8）"))
@@ -37,8 +45,10 @@ def render(res, cn_pv=None):
     lines.append("## 2×2 列联表 / Contingency Table\n")
     lines.append("| | 事件发生 Event | 事件未发生 No Event | 合计 |")
     lines.append("|---|---|---|---|")
-    lines.append("| 用药 Drug | a=%d | b=%d | %d |" % (tbl["a"], tbl["b"], tbl["a"] + tbl["b"]))
-    lines.append("| 未用药 No Drug | c=%d | d=%d | %d |" % (tbl["c"], tbl["d"], tbl["c"] + tbl["d"]))
+    lines.append("| %s | a=%d | b=%d | %d |" % (
+        "有该器械报告 Device" if _dev else "用药 Drug", tbl["a"], tbl["b"], tbl["a"] + tbl["b"]))
+    lines.append("| %s | c=%d | d=%d | %d |" % (
+        "无该器械报告 No device" if _dev else "未用药 No Drug", tbl["c"], tbl["d"], tbl["c"] + tbl["d"]))
     lines.append("| 合计 | %d | %d | N=%d |\n" % (tbl["a"] + tbl["c"], tbl["b"] + tbl["d"], tbl["N"]))
 
     lines.append("## 信号检测结果 / Disproportionality\n")
@@ -102,9 +112,21 @@ def render(res, cn_pv=None):
                 h["title"], h.get("column", "-"), h.get("date") or "-",
                 h.get("snippet", "")[:160]))
     else:
+        st = (cn_pv or {}).get("stats") or {}
+        scanned = st.get("scanned", 0)
         lines.append("")
-        lines.append("未命中中国官方通报（在当前 `--cn-max-pages` 页 / `--cn-since` 日期窗内）。注意：此为**逐页遍历检索**而非全量库检索；"
-                     "如需更广覆盖，可增大 `--cn-max-pages`、放宽 `--cn-since`，或显式传入中文事件词 `--event`。")
+        if cn_pv is None:
+            lines.append("未启用中国 PV 源（`--with-cn-pv`，或工作台勾选「中国药物警戒」）——"
+                         "本节不参与本次分析，**不代表检索后零命中**。")
+        elif scanned == 0:
+            lines.append("**本次未扫描到任何通报条目（扫描 0 条 / %d 栏目）——覆盖率为零，"
+                         "不可解读为「官方无相关通报」**；多为站点结构变更或网络受限所致，"
+                         "请重跑或补中文事件词后复核。"
+                         % len(cn_pv.get("searched_columns") or []))
+        else:
+            lines.append("未命中中国官方通报（已扫描 %d 条，当前 `--cn-max-pages` 页 / `--cn-since` 日期窗内）。"
+                         "注意：此为**逐页遍历检索**而非全量库检索；如需更广覆盖，可增大 `--cn-max-pages`、"
+                         "放宽 `--cn-since`，或显式传入中文事件词 `--event`。" % scanned)
     return "\n".join(lines)
 
 

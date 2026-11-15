@@ -152,13 +152,14 @@ def generate_psur(signal_list: List[Dict], period: str, fmt: str = "md") -> str:
 def _generate_signal_table(signals: List[Dict]) -> str:
     """生成信号表格。"""
     lines = []
-    lines.append("| 药物 Drug | 事件 Event | PRR | ROR | EBGM | 验证状态 | 行动建议 |")
-    lines.append("|---|---|---|---|---|---|---|")
+    lines.append("| 药物 Drug | 事件 Event | PRR | ROR | IC | EBGM | 证据分级 Tier | 验证状态 | 行动建议 |")
+    lines.append("|---|---|---|---|---|---|---|---|---|")
     
     for s in signals:
         lines.append(
             f"| {s.get('drug', '')} | {s.get('event', '')} | "
-            f"{s.get('prr', '-')} | {s.get('ror', '-')} | {s.get('ebgm', '-')} | "
+            f"{s.get('prr', '-')} | {s.get('ror', '-')} | {s.get('ic', '-')} | "
+            f"{s.get('ebgm', '-')} | {s.get('tier') or '-'} | "
             f"{s.get('status', '')} | {s.get('action', '-')} |"
         )
     

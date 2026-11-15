@@ -81,3 +81,17 @@ Both degrade to verbatim passthrough if the resolver is missing. This fixed the 
 | Bug reporting rules + 11-key whitelist | `bug_reporting.md` |
 | Atomic-task unit index | `units.md` |
 | Changelog | `../CHANGELOG.md` |
+
+---
+
+## 5. RWE extension references (v0.10.0 · OMOP CDM + HADES)
+
+Moved out of `SKILL.md` (non-core: explicitly long-term / decoupled from the FAERS pipeline).
+
+- **OMOP CDM** (OHDSI, `github.com/OHDSI/CommonDataModel`) — unified data model layer: build PostgreSQL/Snowflake from versioned DDL, ETL HIS / claims / registry data into standard tables so RWE analysis scripts stay source-agnostic.
+- **HADES** (OHDSI, `github.com/OHDSI/Hades`) — RWE analysis tool stack: CohortMethod (propensity-score matching) + CohortDiagnostics (cohort quality diagnostics).
+- **Boundary**: current focus stays FAERS signal detection; both are long-term RWE extension references, decoupled from the existing FAERS quantitative pipeline.
+
+## 6. openFDA key mechanism (moved from SKILL.md)
+
+openFDA works keyless (anonymous 240 req/min, 1,000 req/day per IP); an optional free key only raises quota. The key, when used, is **stored locally only** (env var / local `.env`) and sent **only over HTTPS to the official openFDA endpoint** (when using local-direct `query_total` / `fetch_case_reports`) — never to any third party. NMPA main site (nmpa.gov.cn) is WAF-blocked (HTTP 412) for local direct fetch, but is reachable via the Coze browser channel (`--with-nmpa-coze`, source=`nmpa_pv`) — verified live 2026-09-01 (drug=methotrexate → Bulletin No.75). Endpoint details, indexable/non-indexable fields, and `count` endpoint pitfalls: `fetch_pipeline.md`.

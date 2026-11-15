@@ -86,7 +86,9 @@ Equivalent to the old `--fast` mode — now the default when no `--run`/`--out-x
 2. **检索结果概要 (Results)**: 8 distribution blocks (table + native chart each):
    seriousness pie / sex pie / report-type bar / source-country Top12 / yearly
    trend line / top-reactions Top15 / top-indications Top12 / drug-role.
-3. **原始明细 (Raw)**: empty placeholder in fast mode.
+3. **个案明细 (Cases)**: unified per-case sheet (12 columns, frozen header +
+   autofilter). Same template as `report_xlsx.build_signal_xlsx` (single source of
+   truth in `xlsx_sheets.build_case_details`). Empty placeholder in fast mode.
 UI labels via `ct-base/i18n.py` (bilingual); raw values (PT, country code, drug
 name) kept verbatim. Visual spec (medical-red palette / 24px header / zebra rows /
 cover logo) from shared `ct-base excel_style`.
