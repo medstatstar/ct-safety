@@ -47,6 +47,22 @@
 
 ---
 
+## B.1 路径同源纪律（HARD，2026-11-15 新增）
+
+同一技能存在**两条产出 `.xlsx` 的路径**，其导出实现（L3）**必须同源**：
+
+| 路径 | 入口 | 落点 |
+|---|---|---|
+| **对话 / CLI**（AI 智能体按 SKILL.md 提示词调用） | 主 `scripts/export_xlsx.py`（或 `report_xlsx.py` / `xlsx_sheets.py`） | 主 `scripts/` |
+| **工作台页面**（网页下载） | 发布面 `workbench/publish*/scripts/` 同名件 | 发布面副本 |
+
+- **硬纪律**：发布面副本须与主 `scripts/` 同名件**逐字一致**（忽略行尾空白）。禁止「只更新一侧」——否则同一技能的工作台下载与对话导出会产出**不同模板**（sheet 结构 / 表头 / 图表 / 语言），用户无从察觉。
+- **为什么不做跨技能全局统一**：L3 是领域实现（见 §B 表），各技能的 sheet 数 / 分布维度 / schema 本质不同，强行统一会产生上帝基类；本纪律只约束**同一技能的两条路径**。
+- **机检**：`scripts/shared_sync_check.py` 的 `export-chain-sync` 项对存在 `workbench/publish*/scripts/` 的技能强制比对，不一致或主目录缺失即 **ERROR（阻止发布）**；无发布面的技能自动跳过。
+- **L1/L2 已有闸门**：`excel_style.py` / `xlsx_delivery.py` 由 `_PY_STRICT` 守护（携带即与底座逐字一致），故两条路径天然同源；本节补齐的是**未被任何闸门覆盖的 L3**。
+
+---
+
 ## C. 标准七步流程（所有技能必须遵守的顺序）
 
 ```
@@ -100,6 +116,7 @@
 | CLI 语言参数 | `--lang {auto,zh,en}`，用 `xlsx_delivery.add_lang_argument(parser)` 统一 help 文本 |
 | 导出 API | `export_workbook(data, out_path, *, lang="auto", **skill_specific)`；`lang` 恒为关键字参数，返回 sheet 数 |
 | 工作台下载 | `GET /api/download?task=<id>`（或 `/api/file?dir=&name=`），`Content-Type` 为 xlsx MIME，`Content-Disposition: attachment` |
+| 导出实现同源 | 发布面 `workbench/publish*/scripts/` 的 `export_xlsx.py` / `report_xlsx.py` / `xlsx_sheets.py` 须与主 `scripts/` 同名件逐字一致（§B.1；机检 `export-chain-sync`） |
 | 工作台语言注入 | 前端表单带 `lang`（当前 `WB_LANG`）；后端子进程 env 写 `CT_<SKILL>_LANG`（默认 zh） |
 | 工作台默认界面语言 | `workbench.config.json` 的 `i18n.defaultLang` 统一为 **zh**（ct-safety 曾是 `en`，已对齐） |
 | 发布包自包含 | 共享件经 `publish_inject.py` 注入；发布包内不得出现 ct-base sibling fallback |
@@ -132,20 +149,26 @@
 |---|---|---|
 | **阶段 1（已完成）** | 底座新增 `scripts/xlsx_delivery.py` + 本文档；登记进 `publish_inject.py::SHARED_ASSETS`；`excel_style.md` / BASE 双视图索引互链 | 零：未改生产代码 |
 | **阶段 2（✅ 2026-11-06 已完成）** | 三个技能删除本地 `resolve_report_lang()`，改为 `from xlsx_delivery import resolve_report_lang` 并传 `skill=`；`ct_literature.py` / `export_html.py` / `report.py` / `report_xlsx.py` 引用点同步；共享件物理注入 3 个主 `scripts/` + 3 个发布包 `scripts/`（逐文件一致）；修复英文模式中文残留（文献混排标签 / 封面中英并列主题 / 兜底报告硬编码中文表头） | 中：已完成全量回归，**线上三个应用仍待重新部署** |
-| **阶段 3（待做）** | 把 `xlsx_delivery.py` 纳入 `shared_sync_check.py::_PY_STRICT` + `_REF_KW`；补 `ctqa` W1_CLI 用例断言 F1–F9；其余产出 xlsx 的技能（ct-pipeline / ct-tlf 等）照本规范接入 | 低 |
+| **阶段 3（✅ 2026-11-06 已完成）** | `xlsx_delivery.py` 纳入 `shared_sync_check.py::_PY_STRICT` + `_REF_KW`（消费者契约：引用未携带 / 携带漂移均判 ERROR，未引用技能零噪声）；补 `ctqa` W1_CLI 套件 `xlsx_delivery_cases.py` 断言 F1–F9（四技能实跑 9/9 PASS）；`ct-pipeline` 接入共享件（删本地 `_LANG="en"` 恒英文回退，改 import；框架 chrome 全面双语化，英文版 CJK 数据单元格全为原始简报值、机检 `ok=true`）；`ct-sdtm` 仅注入资产并登记技术规格类边界 | 低 |
 
 > ⚠️ 阶段 2 已验收的行为差异：统一版**不读 OS locale**，纯英文标题 + 英文 OS 的旧行为是 `en`，新行为是 `zh`；英文用户须显式 `--lang en` 或工作台切 EN（后端注入 `CT_<SKILL>_LANG=en`）。这是刻意选择——中文用户优先，且工作台已显式下发界面语言。
 >
 > ⚠️ ct-base 永不发布：阶段 2 已把 `xlsx_delivery.py` 实际复制进每个技能的主目录与发布包；后续新增产出 xlsx 的技能必须同样物理注入，否则线上 `ModuleNotFoundError`。
 >
-> ✅ 阶段 2 验收：4 个导出器 × 2 语言，英文版 CJK 单元格均为 **0**；中文版 sheet 名与表头全中文；`--lang en` 与 `CT_<SKILL>_LANG=en` 均产出英文；英文表头注入中文的反例被 `verify_workbook()` 准确判失败；发布包脚本独立运行自包含。
+> ✅ 阶段 2 验收：4 个导出器（registry / literature / safety / pipeline）× 2 语言，英文版**界面 chrome（sheet 名 / 表头 / A 列短标签）零中文**；中文版 sheet 名与表头全中文；`--lang en` 与 `CT_<SKILL>_LANG=en` 均产出英文；英文表头注入中文的反例被 `verify_workbook()` 准确判失败；发布包脚本独立运行自包含。
+>
+> ✅ 阶段 3 验收（2026-11-06）：闸门 `_PY_STRICT` / `_REF_KW` 对「引用未携带」「携带漂移」判 ERROR、未引用技能零噪声；`ctqa` W1_CLI 的 `xlsx_delivery_cases.py` 九项 F1–F9 在四技能实跑 **9/9 PASS**；`ct-pipeline` 删除本地恒英文回退、接入共享件，框架 chrome 全面双语化，英文版 21 个 CJK 单元格**全部是简报原始数据值**（机检 `ok=true`）。
+>
+> ⚠️ **数据保真红线（用户 2026-11-06 明确）**：英文模式下，**检索到的原始中文数据值保持原状，不得为追求"零中文"而刻意翻译成英文**。中英文切换只作用于**界面 chrome**（sheet 名、表头、字段标签、KPI / 图例、说明文字、图表标题、封面元信息）；明细数据区（中文试验名、CDE 中文状态、中文申办方、FAERS 原始字段、生成叙述中的原始中文引用）一律保留原文。`verify_workbook()` 的 F9 仅约束 chrome，数据区中文只进 `cjk_cells` 报告、不阻断——这正是该红线的机检体现。
 
 ---
 
 ## H. 接线清单（改本规范时必须同步）
 
 - `scripts/publish_inject.py` → `SHARED_ASSETS` 登记 `scripts/xlsx_delivery.py` 与 `references/xlsx_delivery.md`
+- `references/ref_shared_manifest.json` → `reference_assets` 登记 `references/xlsx_delivery.md`（2026-11-15 纳入）：主副本与发布面副本均为**自动生成物**，由 `inject_references_shared.py` 同步、`shared_sync_check.py::references-shared` 守护（漂移即 ERROR）；改规范只改 ct-base 真源，勿手改叶子副本。
 - `scripts/shared_sync_check.py` → 阶段 3 前**仅注入表登记，不入 `_PY_STRICT`**（口径同 `wb_detail_check.py` / `doc_comments.py`，避免对未引用该件的 16 个技能产生无谓 WARN）；阶段 2 已由 `publish_inject` 的登记 + 6 处物理注入保证自包含
+- `scripts/shared_sync_check.py` → 2026-11-15 新增 `export-chain-sync` 检查（`_EXPORT_CHAIN_FILES` + `_check_export_chain_sync`）守护 §B.1 路径同源纪律
 - `references/excel_style.md §9` → 互链到本文档
 - `BASE.md` 与 `docs/00-index.md` → 双视图索引逐字同步（F31 闸门为逐字比较）
 - `CHANGELOG.md` → 按 §9 版本纪律登记
