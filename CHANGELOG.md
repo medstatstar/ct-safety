@@ -19,7 +19,7 @@
 ### 兼容性
 
 - 工作台 `wb-config` 契约、`/api/*` 端点与产物字段名**未变**，旧调用方无需改动；
-- `workbench/publish/` 本地载荷仍是 0.10.11 构建，发布前须用 `workbench/publish-kit/build_publish.py` 重新生成，否则线上页脚会显示旧版本。
+- `workbench/publish/` 本地载荷已用 `workbench/publish-kit/build_publish.py` 重建为 1.0.0（61 文件，红线自检通过），线上页脚与 `/api/config` 均读 `1.0.0`；后续每次发布前仍须无条件重跑该构建，不要复用旧产物。
 
 ## v0.10.12 — 2026-11-15 · README 11 个示例逐条实测 + 6 处实现修正 + 发布前闸门整改
 
